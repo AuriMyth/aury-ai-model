@@ -234,8 +234,6 @@ Role.tool      # "tool"
 Message(role="tool", ...)  # 等同于 Message(role=Role.tool, ...)
 ```
 
-对应测试：`test_history.py`（基本对话、工具调用、流式聚合、消息结构）。
-
 ---
 
 ## 核心概念
@@ -289,8 +287,6 @@ Provider 选择与 transport：
 - Pydantic v2 支持 `validation_alias` 与 `field_validator`（见测试对温度/别名的容错）
 - 失败抛出 `ValueError: structured parse failed: ...`
 
-对应测试：`test_structured_output.py`（基础、strict、repair、复杂嵌套）。
-
 ---
 
 ## 工具与 MCP
@@ -305,8 +301,6 @@ Provider 选择与 transport：
 - 第 1 轮 assistant 产出 `tool_calls`（以及 OpenRouter 的 `reasoning_details`）
 - 第 2 轮将上一轮 assistant 消息原样回传，并附带每个 tool 的 `tool` 消息（带 `tool_call_id`）
 
-对应测试：`test_mcp_tools.py`、`test_reasoning_details.py`（含 DeepSeek/Gemini）。
-
 ---
 
 ## Reasoning / reasoning_details（多轮传递）
@@ -318,8 +312,6 @@ Provider 选择与 transport：
 
 用途：当模型使用函数调用（工具调用）时，将 `reasoning_details` 与 `tool_calls` 一起随 assistant 回传，以供下一轮推理。
 
-对应测试：`test_reasoning_details.py`（非流/流式 + 模型切换）。
-
 ---
 
 ## 多图输出（OpenRouter / Gemini）
@@ -327,8 +319,6 @@ Provider 选择与 transport：
 - 非流式：OpenRouter 返回 `choices[0].message.images`；适配器会映射为多个 `Image(url=...)` part（支持 data:URL / https）
 - 流式：目前以文本/工具/usage 为主，最终多图建议走非流式获取
 - 可通过 prompt 或 `extra_body`（若后端支持，如 `n: 2`）提示多图
-
-对应测试：`test_gemini_image.py`（保存 base64 data:URL 为本地 PNG）。
 
 ---
 
@@ -338,8 +328,6 @@ Provider 选择与 transport：
 - Doubao/Ark：`previous_response_id`、`caching`、其它开关
 - OpenAI：Responses/Chat 兼容的扩展参数
 
-对应测试：`test_extra_body.py`（provider 路由、transforms、默认参数与覆盖）。
-
 ---
 
 ## 重试（with_retry, tenacity）
@@ -348,8 +336,6 @@ Provider 选择与 transport：
 - 默认重试：`ModelTimeoutError`、`RateLimitError`、`ModelOverloadedError`、`TransportError`
 - 不重试：`InvalidRequestError`
 - 适用于：`ainvoke` 与 `astream`
-
-对应测试：`test_with_retry.py`（本地 FlakyAdapter，无外部 API）。
 
 ---
 
@@ -389,8 +375,6 @@ tracker = UsageTracker()
 register_sink(tracker)
 ```
 
-对应测试：`test_model_ctx.py`（上下文装饰器/管理器/嵌套/headers）、`test_llm_comprehensive.py`（完整 UsageTracker 示例）。
-
 ---
 
 ## 错误模型（统一异常）
@@ -400,29 +384,7 @@ register_sink(tracker)
 - 不建议重试：`InvalidRequestError`、`SchemaMismatchError`、`ProviderNotInstalledError`、`StreamBrokenError`
 - Provider 适配器将 HTTP/SDK 异常归一为以上类型（具体见各适配器 `except` 分支）
 
-对应测试：`test_errors.py`。
-
 ---
-
-## 测试与环境
-
-- 仅本地可跑（无外网）：`test_with_retry.py`、`test_errors.py`、`test_mcp_tools.py`、`test_model_ctx.py`
-- 需外部 API（跳过条件：未设置 Key）：`test_structured_output.py`、`test_extra_body.py`、`test_reasoning_details.py`、`test_gemini_image.py`
-- 综合测试：`test_llm_comprehensive.py`（覆盖基本调用、流式、Thinking、工具、多模态、Usage 聚合）
-- 常用环境变量：`.env` 中 `OPENROUTER_API_KEY`、可选 `GEMINI_IMAGE_MODEL`
-
-运行示例：
-```bash
-python3 test_with_retry.py
-python3 test_errors.py
-python3 test_mcp_tools.py
-python3 test_model_ctx.py
-# 需要 API：
-python3 test_structured_output.py
-python3 test_extra_body.py
-python3 test_reasoning_details.py
-python3 test_gemini_image.py
-```
 
 ---
 
@@ -474,7 +436,6 @@ aury/
 - 可观测：上下文/指标 sink + usage 聚合
 - 重试：client.with_retry(...)（tenacity）
 
-> 功能覆盖见 tests：`test_model_ctx.py`、`test_structured_output.py`、`test_mcp_tools.py`、`test_extra_body.py`、`test_reasoning_details.py`、`test_gemini_image.py`、`test_with_retry.py`、`test_errors.py`。
 
 ---
 
@@ -606,7 +567,6 @@ from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, Stream
 ## 结构化输出（with_structured_output）
 - `expect_strict=True` 时优先严格校验；否则走 Repair/Extract 兜底。
 - 失败会抛出 `ValueError: structured parse failed: ...`。
-- 参考：`test_structured_output.py`（含容错示例：字段别名、数值提取/缺省）。
 
 ---
 
@@ -614,25 +574,22 @@ from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, Stream
 - 声明：`ToolSpec(kind=..., ...)`；
 - 编码：`to_openai_tools` 会将 MCP 工具编码为 `mcp::{server}::{name}`；
 - 解析：`normalize_tool_call` 会还原并填充 `mcp_server_id`；
-- 示例见 `test_mcp_tools.py` 与多轮工具调用用例 `test_reasoning_details.py`。
 
 ---
 
 ## Reasoning / reasoning_details（多轮传递）
 - OpenRouter DeepSeek/Gemini 等：适配器在非流式从原始 JSON 中提取 `reasoning_details`，在流式于 `completed` 事件聚合后回传，便于将其随 assistant tool_calls 一并带回第二轮。
-- 示例：`test_reasoning_details.py`（非流/流式、DeepSeek/Gemini）。
 
 ---
 
 ## 多图输出（OpenRouter / Gemini）
 - 非流式：OpenRouter 返回的 `choices[0].message.images` 会被映射到多个 `Image` part。
-- 示例：`test_gemini_image.py`。可用 `extra_body`（如后端支持）请求多图，否则通过 prompt 提示生成多张图。
+- 可用 `extra_body`（如后端支持）请求多图，否则通过 prompt 提示生成多张图。
 
 ---
 
 ## extra_body 透传
 - 通过 `extra_body={...}` 传入 Provider 特定参数，如 OpenRouter 的 `provider.order`、`transforms`。
-- 示例：`test_extra_body.py`。
 
 ---
 
@@ -640,14 +597,12 @@ from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, Stream
 - `client.with_retry(max_attempts=3, base_delay=0.5, max_delay=5.0, backoff_factor=2.0)` 返回 RetryView；
 - 默认重试错误：`ModelTimeoutError`、`RateLimitError`、`ModelOverloadedError`、`TransportError`；不重试 `InvalidRequestError`；
 - 支持自定义 `retry_on`/`predicate`；
-- 示例：`test_with_retry.py`（非流式成功、流式成功、遇到 InvalidRequestError 立即失败）。
 
 ---
 
 ## 上下文与可观测性
 - `model_ctx`：上下文管理器/装饰器（trace_id/request_id/provider/model/extra_headers）。
 - instrumentation：`emit_*` + sink 注册；`client.last_usage()` 聚合读数。
-- 示例：`test_model_ctx.py`。
 
 ---
 
@@ -655,14 +610,11 @@ from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, Stream
 - `ModelTimeoutError` / `RateLimitError` / `ModelOverloadedError`
 - `InvalidRequestError` / `TransportError` / `StreamBrokenError`
 - `SchemaMismatchError` / `ProviderNotInstalledError`
-- 示例：`test_errors.py`。
 
 ---
 
 ## 运行测试与环境
 - 建议 `.env`：`OPENROUTER_API_KEY=...`、可选 `GEMINI_IMAGE_MODEL=google/gemini-3-pro-image-preview`。
-- 仅本地可跑（无外网）的用例：`test_with_retry.py`、`test_errors.py`、部分工具/上下文测试。
-- 其余依赖外部 API 的用例会在未配置 Key 时自动跳过或报网络错误。
 
 ---
 
