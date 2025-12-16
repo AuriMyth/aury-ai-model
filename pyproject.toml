@@ -77,3 +77,5 @@ exclude = [
 dev = [
     "dotenv>=0.9.9",
 ]
+
+keyring-provider = "subprocess"
