@@ -15,6 +15,8 @@
 # Token 配置 (PyPI 已不支持密码登录，必须使用 API Token):
 #   方式 1: 环境变量 UV_PUBLISH_TOKEN
 #   方式 2: keyring set https://upload.pypi.org/legacy/ __token__
+#
+# 注意: uv publish 会自动从 keyring 读取凭据，或使用环境变量中的 token
 
 set -e
 
@@ -80,25 +82,23 @@ check_dist() {
 # 配置 Token
 setup_token() {
     if [ -z "$UV_PUBLISH_TOKEN" ]; then
-        # 尝试从 pypi_key 文件读取
-        if [ -f "pypi_key" ]; then
-            info "从 pypi_key 文件读取 token..."
-            export UV_PUBLISH_TOKEN="$(cat pypi_key | tr -d '\n')"
+        # 检查 keyring 中是否已配置
+        if keyring get https://upload.pypi.org/legacy/ __token__ &>/dev/null; then
+            info "检测到 keyring 中已配置 PyPI 凭据"
+            success "将使用 keyring 中的凭据进行认证"
         else
-            warning "未设置 UV_PUBLISH_TOKEN 环境变量，也未找到 pypi_key 文件"
+            warning "未设置 UV_PUBLISH_TOKEN 环境变量"
+            info ""
             info "Token 配置方式 (PyPI 必须使用 API Token):"
             echo "  1. 环境变量: export UV_PUBLISH_TOKEN='pypi-xxxx...'"
-            echo "  2. 创建 pypi_key 文件: echo 'your-token' > pypi_key"
-            echo "  3. keyring: keyring set https://upload.pypi.org/legacy/ __token__"
+            echo "  2. keyring 配置: keyring set https://upload.pypi.org/legacy/ __token__"
             echo ""
             info "获取 Token: https://pypi.org/manage/account/token/"
             echo ""
-            read -p "是否继续? (yes/no): " continue_confirm
-            if [ "$continue_confirm" != "yes" ]; then
-                info "已取消发布"
-                exit 0
-            fi
+            warning "当前没有配置任何认证方式，uv publish 将提示输入凭据"
         fi
+    else
+        success "将使用 UV_PUBLISH_TOKEN 环境变量进行认证"
     fi
 }
 
@@ -130,20 +130,25 @@ publish() {
     fi
     
     info "开始上传..."
+    
     # 构建 uv publish 命令
-    local publish_cmd="uv publish"
-    
     if [ "$TARGET" = "test" ]; then
-        publish_cmd="$publish_cmd --publish-url '$pypi_url'"
+        # 测试 PyPI
+        if [ -n "$UV_PUBLISH_TOKEN" ]; then
+            uv publish --publish-url "$pypi_url" --token "$UV_PUBLISH_TOKEN"
+        else
+            # 没有 token，uv 会从 keyring 读取或提示输入
+            uv publish --publish-url "$pypi_url"
+        fi
+    else
+        # 正式 PyPI (默认 PyPI 地址)
+        if [ -n "$UV_PUBLISH_TOKEN" ]; then
+            uv publish --token "$UV_PUBLISH_TOKEN"
+        else
+            # 没有 token，uv 会从 keyring 读取或提示输入
+            uv publish
+        fi
     fi
-    
-    # 添加认证信息（优先使用 token）
-    if [ -n "$UV_PUBLISH_TOKEN" ]; then
-        publish_cmd="$publish_cmd --token '$UV_PUBLISH_TOKEN'"
-    fi
-    
-    # 执行发布命令
-    eval "$publish_cmd"
     
     success "发布完成！"
 }
@@ -162,14 +167,15 @@ show_help() {
     echo "  需要先运行 ./build.sh 构建包，或确保 dist/ 目录存在"
     echo ""
     echo "Token 配置 (PyPI 必须使用 API Token):"
+    echo ""
     echo "  方式 1: 环境变量"
     echo "    export UV_PUBLISH_TOKEN='pypi-xxxx...'"
+    echo "    ./publish.sh prod"
     echo ""
-    echo "  方式 2: 创建 pypi_key 文件"
-    echo "    echo 'your-token' > pypi_key"
-    echo ""
-    echo "  方式 3: keyring"
+    echo "  方式 2: keyring (推荐)"
     echo "    keyring set https://upload.pypi.org/legacy/ __token__"
+    echo "    然后输入你的 PyPI Token"
+    echo "    ./publish.sh prod"
     echo ""
     echo "获取 Token: https://pypi.org/manage/account/token/"
 }
