@@ -1,4 +1,4 @@
-# auri-ai-core · model
+# aury-ai-model
 
 > 统一、高可靠的 LLM 调用层：统一消息/事件模型，多 Provider 适配（OpenAI / OpenRouter / Doubao），结构化输出管线（Strict + Repair），工具声明与解析（含 MCP），上下文与可观测性（usage/metrics），以及基于 tenacity 的 with_retry 重试封装。面向生产调用稳定性与类型安全，不内置 Agent/工具执行。
 
@@ -41,7 +41,7 @@ pip install 'volcengine-python-sdk[ark]'
 
 直接初始化（推荐）：
 ```python
-from model import ModelClient, msg
+from aury.ai.model import ModelClient, msg
 
 client = ModelClient(
     provider="openrouter",
@@ -138,7 +138,7 @@ res = await client.ainvoke([msg.user("Create two icon variations")])
 
 ### 基本多轮对话
 ```python
-from model import ModelClient, msg, Message, Role
+from aury.ai.model import ModelClient, msg, Message, Role
 
 client = ModelClient(provider="openrouter", model="openai/gpt-4o-mini", api_key="...")
 history: list[Message] = []
@@ -174,7 +174,7 @@ for _ in range(5):  # 最多5轮工具调用
 ### 流式历史管理
 流式返回 `StreamEvent`，用 `StreamCollector` 聚合：
 ```python
-from model import StreamCollector
+from aury.ai.model import StreamCollector
 
 history = [msg.user("你好")]
 collector = StreamCollector()
@@ -365,7 +365,7 @@ Provider 选择与 transport：
 
 自定义 InstrumentSink 示例：
 ```python
-from model.instrumentation import InstrumentSink, RequestMetrics, register_sink
+from aury.ai.model.instrumentation import InstrumentSink, RequestMetrics, register_sink
 
 class UsageTracker(InstrumentSink):
     def __init__(self):
@@ -441,23 +441,25 @@ python3 test_gemini_image.py
 
 ## 目录结构
 ```
-model/
-  __init__.py
-  README.md
-  client.py
-  context.py
-  errors.py
-  instrumentation.py
-  retry.py
-  structured.py
-  tools.py
-  types.py
-  providers/
-    base.py
-    registry.py
-    openai.py
-    openrouter.py
-    doubao.py
+aury/
+  ai/
+    model/
+      __init__.py
+      README.md
+      client.py
+      context.py
+      errors.py
+      instrumentation.py
+      retry.py
+      structured.py
+      tools.py
+      types.py
+      providers/
+        base.py
+        registry.py
+        openai.py
+        openrouter.py
+        doubao.py
 ```
 
 现代化（Python 3.12+）模型调用层：统一消息/事件模型，多 Provider 适配，严格而稳健的结构化输出，MCP 工具声明与解析，可插拔可观测性，以及内置重试 with_retry（tenacity）。不内置 Agent/工具执行，仅专注“调用稳定 + 类型友好”。
@@ -484,7 +486,7 @@ pip install pydantic==2.* openai>=1.0 json-repair tenacity python-dotenv
 pip install 'volcengine-python-sdk[ark]'
 ```
 
-源码方式引入（此仓库中的 `model/` 目录）。
+源码方式引入（此仓库中的 `aury/ai/model/` 目录）。
 
 ---
 
@@ -493,7 +495,7 @@ pip install 'volcengine-python-sdk[ark]'
 ### 初始化
 直接初始化（推荐）：
 ```python
-from model import ModelClient, msg
+from aury.ai.model import ModelClient, msg
 
 client = ModelClient(
     provider="openrouter",
@@ -575,7 +577,7 @@ res = await retrying.ainvoke([msg.user("稳定返回一句话")])
 
 ## 消息与事件（摘要）
 ```python
-from model.types import Message, Text, Image, Thinking, ToolCall, StreamEvent, Evt
+from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, StreamEvent, Evt
 # msg.system(...) / msg.user(text, images=[...]) 提供便捷构造
 ```
 事件流：`content` 文本增量、`thinking` 思考增量、`tool_call` 工具调用、`usage` 用量、`completed` 结束。
@@ -666,23 +668,25 @@ from model.types import Message, Text, Image, Thinking, ToolCall, StreamEvent, E
 
 ## 目录
 ```
-model/
-  __init__.py
-  README.md
-  client.py
-  context.py
-  errors.py
-  instrumentation.py
-  retry.py
-  structured.py
-  tools.py
-  types.py
-  providers/
-    base.py
-    registry.py
-    openai.py
-    openrouter.py
-    doubao.py
+aury/
+  ai/
+    model/
+      __init__.py
+      README.md
+      client.py
+      context.py
+      errors.py
+      instrumentation.py
+      retry.py
+      structured.py
+      tools.py
+      types.py
+      providers/
+        base.py
+        registry.py
+        openai.py
+        openrouter.py
+        doubao.py
 ```
 
 ---
