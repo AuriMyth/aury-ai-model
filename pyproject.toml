@@ -1,6 +1,6 @@
 [project]
 name = "aury-ai-model"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -11,9 +11,6 @@ dependencies = [
     "tenacity>=9.1.2",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["aury"]
-
 [project.optional-dependencies]
 doubao = [
     "volcengine-python-sdk[ark]>=1.0",
@@ -21,6 +18,61 @@ doubao = [
 all = [
     "volcengine-python-sdk[ark]>=1.0",
 ]
+
+[build-system]
+requires = [
+    "hatchling",
+    "hatch-vcs",
+]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "aury/ai/model/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "aury",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "aury/",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "/.git",
+    "/.venv",
+    "/.idea",
+    "/.vscode",
+    "/.cursor",
+    "/.ruff_cache",
+    "/.mypy_cache",
+    "/.pytest_cache",
+    "/__pycache__",
+    "/dist",
+    "/build",
+    "/docs",
+    "/tests",
+    "/logs",
+    "*.egg-info",
+    "*.pyc",
+    "*.pyo",
+    ".env*",
+    "*.bak",
+    "uv.lock",
+    "release.sh",
+    "pypi_key",
+    "WARP.md",
+    "LATEST_UPDATES.md",
+    "IMPLEMENTATION_SUMMARY.md",
+    "FOUNDATION_KIT_MISSING_FEATURES.md",
+]
+
 [dependency-groups]
 dev = [
     "dotenv>=0.9.9",

@@ -284,7 +284,7 @@ Provider 选择与 transport：
 要点：
 - Chat API 用 `response_format={"type":"json_object"}`；Responses/Doubao 用 `text_format={"type":"json_object"}`
 - 提示词尽量明确字段与扁平结构，避免多包一层（如 `{"company":{...}}`）
-- Pydantic v2 支持 `validation_alias` 与 `field_validator`（见测试对温度/别名的容错）
+- Pydantic v2 支持 `validation_alias` 与 `field_validator`（支持字段别名与容错校验）
 - 失败抛出 `ValueError: structured parse failed: ...`
 
 ---
@@ -612,9 +612,6 @@ from aury.ai.model.types import Message, Text, Image, Thinking, ToolCall, Stream
 - `SchemaMismatchError` / `ProviderNotInstalledError`
 
 ---
-
-## 运行测试与环境
-- 建议 `.env`：`OPENROUTER_API_KEY=...`、可选 `GEMINI_IMAGE_MODEL=google/gemini-3-pro-image-preview`。
 
 ---
 
