@@ -312,21 +312,23 @@ class OpenRouterAdapter(OpenAIAdapter):
 
                 if getattr(ch, "tool_calls", None):
                     for tc in ch.tool_calls:
-                        # 使用 index 作为备用 key（Gemini 可能不返回 id）
+                        # OpenAI 流式格式：第一个 chunk 带 id+name+index，后续 chunks 只带 index+arguments
+                        # 所以必须用 index 作为主 key
                         idx = getattr(tc, "index", None)
                         tid = getattr(tc, "id", None)
+                        
+                        # 优先用 index 作为 key（最可靠），否则用 id
+                        key = f"_idx_{idx}" if idx is not None else (tid or "_last")
+                        entry = partial_tools.setdefault(key, {"id": "", "name": "", "arguments": ""})
+                        
+                        # 更新 id（只在第一个 chunk 出现）
                         if tid:
-                            last_tid = tid
-                        # 优先用 id，其次用 index，最后用 last_tid
-                        key = tid or (f"_idx_{idx}" if idx is not None else None) or last_tid or "_last"
-                        entry = partial_tools.setdefault(key, {"id": tid or "", "name": "", "arguments": ""})
-                        # 如果这个 chunk 带了 id，更新 entry 的 id
-                        if tid and not entry["id"]:
                             entry["id"] = tid
+                        
                         fn = getattr(tc, "function", None)
                         if fn is not None:
-                            # name 只出现一次，用赋值而不是累加
-                            if getattr(fn, "name", None) and not entry["name"]:
+                            # name 只在第一个 chunk 出现
+                            if getattr(fn, "name", None):
                                 entry["name"] = fn.name
                             # arguments 可能分多个 chunk，需要累加
                             if getattr(fn, "arguments", None):
