@@ -78,4 +78,6 @@ dev = [
     "dotenv>=0.9.9",
 ]
 
+[tool.uv]
+# PyPI 发布配置
 keyring-provider = "subprocess"
