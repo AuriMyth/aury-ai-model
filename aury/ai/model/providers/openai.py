@@ -347,8 +347,10 @@ class OpenAIAdapter:
                         if fn is not None:
                             if getattr(fn, "name", None):
                                 entry["name"] += fn.name
-                            if getattr(fn, "arguments", None):
-                                entry["arguments"] += fn.arguments
+                            # arguments 可能是空字符串，用 is not None 而不是 truthy 检查
+                            args_delta = getattr(fn, "arguments", None)
+                            if args_delta is not None:
+                                entry["arguments"] += args_delta
             for _, v in partial_tools.items():
                 yield StreamEvent(type=Evt.tool_call, tool_call=normalize_tool_call(v))
             yield StreamEvent(type=Evt.completed)

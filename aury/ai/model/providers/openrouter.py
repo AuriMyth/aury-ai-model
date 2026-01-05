@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import AsyncIterator
 from .openai import OpenAIAdapter
 from .base import RequestFeatures
-from ..types import Message, StreamEvent, Evt, Text, Thinking, ToolCall, Usage
+from ..types import Message, StreamEvent, Evt, Text, Image, Thinking, ToolCall, Usage
 from ..tools import normalize_tool_call, to_openai_tools
 from ..instrumentation import set_usage
 from ..errors import TransportError
@@ -11,7 +11,7 @@ from ..context import get_ctx
 
 class OpenRouterAdapter(OpenAIAdapter):
     """OpenRouter adapter with support for:
-    - OpenRouter-specific reasoning parameters (include_reasoning, reasoning.effort)
+    - Unified reasoning interface (reasoning.effort, reasoning.summary)
     - Gemini 3 thoughtSignature preservation for function calling
     - Multiple reasoning field formats (reasoning, reasoning_content)
     """
@@ -76,11 +76,25 @@ class OpenRouterAdapter(OpenAIAdapter):
     def _build_extra_body(self, req: RequestFeatures, existing: dict | None = None) -> dict:
         """Build extra_body with OpenRouter-specific parameters."""
         extra = existing.copy() if existing else {}
-        # OpenRouter uses include_reasoning + reasoning.effort for thinking models
-        if req.return_thinking:
-            extra["include_reasoning"] = True
-            effort = req.reasoning_effort or "medium"
-            extra["reasoning"] = {"effort": effort}
+        
+        # OpenRouter 统一的 reasoning 接口
+        # 参考: https://openrouter.ai/docs/api-reference
+        if req.return_thinking or req.reasoning_effort:
+            reasoning_obj = {}
+            
+            # effort: "low" | "medium" | "high" | "max" | "auto" | null
+            if req.reasoning_effort:
+                reasoning_obj["effort"] = req.reasoning_effort
+            elif req.return_thinking:
+                # 如果只设置了 return_thinking，使用默认 effort
+                reasoning_obj["effort"] = "medium"
+            
+            # summary: "auto" | "concise" | "detailed" | null
+            # 暂不设置，使用模型默认值
+            
+            if reasoning_obj:
+                extra["reasoning"] = reasoning_obj
+        
         return extra
 
     def _extract_tool_calls_from_raw(self, raw_tool_calls: list[dict] | None) -> list[ToolCall] | None:
@@ -96,6 +110,76 @@ class OpenRouterAdapter(OpenAIAdapter):
                 "arguments": fn.get("arguments") or "{}",
             }))
         return tool_calls or None
+
+    def _parse_xml_tool_calls(self, content: str) -> tuple[str, list[ToolCall] | None]:
+        """Parse XML-style tool calls from content (DeepSeek/Zhipu/Qwen format).
+        
+        Returns:
+            tuple of (cleaned_content, tool_calls)
+        """
+        import re
+        import json as _json
+        import uuid
+        
+        tool_calls: list[ToolCall] = []
+        
+        # Pattern for <tool_call>{"name": ..., "arguments": ...}</tool_call>
+        tool_call_pattern = re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', re.DOTALL)
+        
+        # Pattern for <function_calls><invoke name="..." ...>...</invoke></function_calls>
+        function_calls_pattern = re.compile(
+            r'<function_calls>.*?<invoke\s+name=["\']([^"\']+)["\'].*?>\s*(.*?)\s*</invoke>.*?</function_calls>',
+            re.DOTALL
+        )
+        
+        # Try tool_call format first
+        for match in tool_call_pattern.finditer(content):
+            try:
+                tc_json = _json.loads(match.group(1))
+                name = tc_json.get("name", "")
+                arguments = tc_json.get("arguments", {})
+                if isinstance(arguments, dict):
+                    arguments = _json.dumps(arguments)
+                tool_calls.append(ToolCall(
+                    id=f"xml_tc_{uuid.uuid4().hex[:8]}",
+                    name=name,
+                    arguments_json=arguments,
+                ))
+            except Exception:
+                pass
+        
+        # Try function_calls format
+        for match in function_calls_pattern.finditer(content):
+            try:
+                name = match.group(1)
+                # Arguments might be in various formats
+                args_str = match.group(2).strip()
+                try:
+                    arguments = _json.loads(args_str) if args_str else {}
+                    if isinstance(arguments, dict):
+                        arguments = _json.dumps(arguments)
+                    else:
+                        arguments = args_str
+                except Exception:
+                    arguments = args_str
+                tool_calls.append(ToolCall(
+                    id=f"xml_fc_{uuid.uuid4().hex[:8]}",
+                    name=name,
+                    arguments_json=arguments if isinstance(arguments, str) else _json.dumps(arguments),
+                ))
+            except Exception:
+                pass
+        
+        if tool_calls:
+            # Remove XML tool calls from content
+            cleaned = tool_call_pattern.sub('', content)
+            cleaned = function_calls_pattern.sub('', cleaned)
+            # Also remove incomplete patterns
+            cleaned = re.sub(r'<tool_call>.*', '', cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r'<function_calls>.*', '', cleaned, flags=re.DOTALL)
+            return cleaned.strip(), tool_calls
+        
+        return content, None
 
     async def ainvoke(self, messages: list[Message], req: RequestFeatures, **kw) -> Message:
         """Override to use OpenRouter-specific reasoning parameters and extract thoughtSignature."""
@@ -129,7 +213,7 @@ class OpenRouterAdapter(OpenAIAdapter):
         if tools := kw.get("tools"):
             payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
 
-        # OpenRouter-specific: reasoning parameters go in extra_body
+        # OpenRouter reasoning 接口：通过 extra_body.reasoning 传递
         extra_body = self._build_extra_body(req, req.extra_body)
         if extra_body:
             payload["extra_body"] = extra_body
@@ -211,6 +295,14 @@ class OpenRouterAdapter(OpenAIAdapter):
 
         tool_calls = self._extract_tool_calls_from_raw(raw_tool_calls) if raw_tool_calls else None
         
+        # If no native tool_calls, try parsing XML-style tool calls from content (DeepSeek/Zhipu/Qwen)
+        if not tool_calls and content and ("<tool_call>" in content or "<function_calls>" in content):
+            cleaned_content, xml_tool_calls = self._parse_xml_tool_calls(content)
+            if xml_tool_calls:
+                tool_calls = xml_tool_calls
+                # Update parts with cleaned content
+                parts = [Text(text=cleaned_content)] if cleaned_content else []
+        
         # Return Message with reasoning_details preserved for tool calling
         return Message(role="assistant", parts=parts, tool_calls=tool_calls, reasoning_details=reasoning_details)
 
@@ -249,7 +341,7 @@ class OpenRouterAdapter(OpenAIAdapter):
         if tools := kw.get("tools"):
             payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
 
-        # OpenRouter-specific: reasoning parameters go in extra_body
+        # OpenRouter reasoning 接口：通过 extra_body.reasoning 传递
         extra_body = self._build_extra_body(req, req.extra_body)
         if extra_body:
             payload["extra_body"] = extra_body
@@ -266,6 +358,8 @@ class OpenRouterAdapter(OpenAIAdapter):
             usage_emitted = False
             # Accumulate reasoning_details from streaming chunks
             accumulated_reasoning_details: list[dict] = []
+            # Accumulate content for XML tool call detection
+            accumulated_content: list[str] = []
 
             for chunk in stream:
                 u = getattr(chunk, "usage", None)
@@ -308,11 +402,12 @@ class OpenRouterAdapter(OpenAIAdapter):
                         yield StreamEvent(type=Evt.thinking, delta=reasoning_delta)
 
                 if getattr(ch, "content", None):
+                    accumulated_content.append(ch.content)
                     yield StreamEvent(type=Evt.content, delta=ch.content)
 
                 if getattr(ch, "tool_calls", None):
                     for tc in ch.tool_calls:
-                        # OpenAI 流式格式：第一个 chunk 带 id+name+index，后续 chunks 只带 index+arguments
+                        # OpenAI 流式格式
                         # 所以必须用 index 作为主 key
                         idx = getattr(tc, "index", None)
                         tid = getattr(tc, "id", None)
@@ -331,13 +426,24 @@ class OpenRouterAdapter(OpenAIAdapter):
                             if getattr(fn, "name", None):
                                 entry["name"] = fn.name
                             # arguments 可能分多个 chunk，需要累加
-                            if getattr(fn, "arguments", None):
-                                entry["arguments"] += fn.arguments
+                            # 注意：arguments 可能是空字符串，所以用 is not None 而不是 truthy 检查
+                            args_delta = getattr(fn, "arguments", None)
+                            if args_delta is not None:
+                                entry["arguments"] += args_delta
 
             # Emit accumulated tool calls
             for _, v in partial_tools.items():
                 normalized = normalize_tool_call(v)
                 yield StreamEvent(type=Evt.tool_call, tool_call=normalized)
+            
+            # If no native tool_calls, check for XML-style tool calls in accumulated content
+            if not partial_tools:
+                full_content = "".join(accumulated_content)
+                if "<tool_call>" in full_content or "<function_calls>" in full_content:
+                    _, xml_tool_calls = self._parse_xml_tool_calls(full_content)
+                    if xml_tool_calls:
+                        for tc in xml_tool_calls:
+                            yield StreamEvent(type=Evt.tool_call, tool_call=tc)
 
             # Emit completed event with reasoning_details for Gemini 3 / DeepSeek tool calling
             yield StreamEvent(

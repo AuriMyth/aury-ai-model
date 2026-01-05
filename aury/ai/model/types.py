@@ -2,6 +2,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal, TypeAlias
+import json
 
 class Evt(StrEnum):
     content = "content"
@@ -40,6 +41,26 @@ class ToolCall(BaseModel):
     name: str
     arguments_json: str
     mcp_server_id: str | None = None
+
+    @property
+    def arguments(self) -> dict:
+        """Parsed arguments as dict (convenience).
+        Safe fallback to empty dict if JSON is invalid.
+        """
+        try:
+            return json.loads(self.arguments_json or "{}")
+        except Exception:
+            return {}
+
+    def with_arguments(self, args: dict) -> "ToolCall":
+        """Return a copy with arguments_json set from dict.
+        This does not mutate the current instance.
+        """
+        try:
+            args_json = json.dumps(args)
+        except Exception:
+            args_json = "{}"
+        return self.model_copy(update={"arguments_json": args_json})
 
 class Message(BaseModel):
     model_config = ConfigDict(frozen=True)
