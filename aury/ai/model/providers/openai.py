@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import AsyncIterator
 from pydantic import BaseModel
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from ..types import Message, StreamEvent, Evt, Text, Image, Thinking, ToolCall, Usage
 from ..tools import to_openai_tools, normalize_tool_call
 from ..instrumentation import set_usage
@@ -21,7 +21,9 @@ class OpenAIAdapter:
         self.api_key = api_key
         self.headers = headers or {}
         self.transport = (transport or "chat").lower()
+        # Use both sync and async clients
         self.client = OpenAI(base_url=base_url, api_key=api_key)
+        self.async_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     def route(self, req: RequestFeatures) -> ProviderRoute:
         # 只有在明确指定 transport="responses" 时才使用 responses
@@ -266,7 +268,7 @@ class OpenAIAdapter:
             except Exception as e:
                 raise TransportError(str(e)) from e
             return
-        # --- Chat streaming path ---
+        # --- Chat streaming path (using async client to avoid blocking event loop) ---
         payload = dict(
             model=self.model,
             messages=self._to_messages(messages),
@@ -300,15 +302,17 @@ class OpenAIAdapter:
             payload.setdefault("extra_body", {}).update(req.extra_body)
         try:
             try:
-                stream = self.client.chat.completions.create(**payload)
+                # Use async client to avoid blocking event loop during streaming
+                stream = await self.async_client.chat.completions.create(**payload)
             except Exception:
                 # 某些 OpenAI 兼容后端可能不支持 stream_options；兼容性重试一次
                 payload.pop("stream_options", None)
-                stream = self.client.chat.completions.create(**payload)
+                stream = await self.async_client.chat.completions.create(**payload)
             partial_tools: dict[str, dict] = {}
             last_tid: str | None = None
             usage_emitted = False
-            for chunk in stream:
+            # Use async iteration to not block event loop
+            async for chunk in stream:
                 # 某些实现会在最后一个 chunk 仅带 usage，而没有 choices
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:

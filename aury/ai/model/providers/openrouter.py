@@ -348,10 +348,11 @@ class OpenRouterAdapter(OpenAIAdapter):
 
         try:
             try:
-                stream = self.client.chat.completions.create(**payload)
+                # Use async client to avoid blocking event loop during streaming
+                stream = await self.async_client.chat.completions.create(**payload)
             except Exception:
                 payload.pop("stream_options", None)
-                stream = self.client.chat.completions.create(**payload)
+                stream = await self.async_client.chat.completions.create(**payload)
 
             partial_tools: dict[str, dict] = {}
             last_tid: str | None = None
@@ -361,7 +362,8 @@ class OpenRouterAdapter(OpenAIAdapter):
             # Accumulate content for XML tool call detection
             accumulated_content: list[str] = []
 
-            for chunk in stream:
+            # Use async iteration to not block event loop
+            async for chunk in stream:
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:
                     rt = 0
