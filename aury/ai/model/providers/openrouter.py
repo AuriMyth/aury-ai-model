@@ -361,6 +361,9 @@ class OpenRouterAdapter(OpenAIAdapter):
             accumulated_reasoning_details: list[dict] = []
             # Accumulate content for XML tool call detection
             accumulated_content: list[str] = []
+            # Track which tools have been notified via tool_call_start
+            notified_tools: set[str] = set()
+            last_progress: dict[str, int] = {}
 
             # Use async iteration to not block event loop
             async for chunk in stream:
@@ -432,6 +435,34 @@ class OpenRouterAdapter(OpenAIAdapter):
                             args_delta = getattr(fn, "arguments", None)
                             if args_delta is not None:
                                 entry["arguments"] += args_delta
+                        
+                        # Emit tool_call_start when we first see a tool with id and name
+                        tool_id = entry["id"]
+                        tool_name = entry["name"]
+                        if tool_id and tool_name and tool_id not in notified_tools:
+                            yield StreamEvent(
+                                type=Evt.tool_call_start,
+                                tool_call=ToolCall(
+                                    id=tool_id,
+                                    name=tool_name,
+                                    arguments_json="",
+                                )
+                            )
+                            notified_tools.add(tool_id)
+                            last_progress[tool_id] = 0
+                        
+                        # Emit tool_call_progress for arguments streaming
+                        if tool_id and tool_id in notified_tools:
+                            current_len = len(entry["arguments"])
+                            if current_len > last_progress.get(tool_id, 0):
+                                yield StreamEvent(
+                                    type=Evt.tool_call_progress,
+                                    tool_call_progress={
+                                        "call_id": tool_id,
+                                        "bytes_received": current_len,
+                                    }
+                                )
+                                last_progress[tool_id] = current_len
 
             # Emit accumulated tool calls
             for _, v in partial_tools.items():

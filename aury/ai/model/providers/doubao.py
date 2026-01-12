@@ -221,6 +221,8 @@ class DoubaoArkAdapter:
                 stream = await self.client.chat.completions.create(**payload)
 
             partial_tools: dict[str, dict] = {}
+            notified_tools: set[str] = set()  # 记录已通知的工具
+            last_progress: dict[str, int] = {}  # 记录上次进度位置
             usage_emitted = False
             last_tid: str | None = None
             async for chunk in stream:
@@ -247,11 +249,52 @@ class DoubaoArkAdapter:
                             tid = tc.get("id") or last_tid or "_last"
                             if tc.get("id"):
                                 last_tid = tid
+                            
+                            # ⭐ 首次通知 - tool_call_start
+                            if tid not in notified_tools:
+                                tool_name = fn.get("name")
+                                if tool_name:
+                                    yield StreamEvent(
+                                        type=Evt.tool_call_start,
+                                        tool_call=ToolCall(
+                                            id=tid,
+                                            name=tool_name,
+                                            arguments_json="",
+                                        )
+                                    )
+                                    notified_tools.add(tid)
+                                    last_progress[tid] = 0
+                            
                             entry = partial_tools.setdefault(tid, {"id": tid, "name": "", "arguments": ""})
                             if fn.get("name"):
                                 entry["name"] += fn["name"]
-                            if fn.get("arguments"):
-                                entry["arguments"] += fn["arguments"]
+                            args_delta = fn.get("arguments")
+                            if args_delta:
+                                # ⭐ 参数增量 - tool_call_delta
+                                yield StreamEvent(
+                                    type=Evt.tool_call_delta,
+                                    tool_call_delta={
+                                        "call_id": tid,
+                                        "arguments_delta": args_delta,
+                                    }
+                                )
+                                
+                                entry["arguments"] += args_delta
+                                
+                                # ⭐ 进度通知 - tool_call_progress
+                                current_size = len(entry["arguments"])
+                                prev_size = last_progress.get(tid, 0)
+                                
+                                if current_size - prev_size >= 1024:
+                                    yield StreamEvent(
+                                        type=Evt.tool_call_progress,
+                                        tool_call_progress={
+                                            "call_id": tid,
+                                            "bytes_received": current_size,
+                                            "last_delta_size": current_size - prev_size,
+                                        }
+                                    )
+                                    last_progress[tid] = current_size
                     continue
 
                 # fallback: attribute style
@@ -276,12 +319,53 @@ class DoubaoArkAdapter:
                         tid = getattr(tc, "id", None) or last_tid or "_last"
                         if getattr(tc, "id", None):
                             last_tid = tid
+                        
+                        # ⭐ 首次通知 - tool_call_start
+                        if tid not in notified_tools:
+                            tool_name = getattr(fn, "name", None) if fn else None
+                            if tool_name:
+                                yield StreamEvent(
+                                    type=Evt.tool_call_start,
+                                    tool_call=ToolCall(
+                                        id=tid,
+                                        name=tool_name,
+                                        arguments_json="",
+                                    )
+                                )
+                                notified_tools.add(tid)
+                                last_progress[tid] = 0
+                        
                         entry = partial_tools.setdefault(tid, {"id": tid, "name": "", "arguments": ""})
                         if fn is not None:
                             if getattr(fn, "name", None):
                                 entry["name"] += fn.name
-                            if getattr(fn, "arguments", None):
-                                entry["arguments"] += fn.arguments
+                            args_delta = getattr(fn, "arguments", None)
+                            if args_delta:
+                                # ⭐ 参数增量 - tool_call_delta
+                                yield StreamEvent(
+                                    type=Evt.tool_call_delta,
+                                    tool_call_delta={
+                                        "call_id": tid,
+                                        "arguments_delta": args_delta,
+                                    }
+                                )
+                                
+                                entry["arguments"] += args_delta
+                                
+                                # ⭐ 进度通知 - tool_call_progress
+                                current_size = len(entry["arguments"])
+                                prev_size = last_progress.get(tid, 0)
+                                
+                                if current_size - prev_size >= 1024:
+                                    yield StreamEvent(
+                                        type=Evt.tool_call_progress,
+                                        tool_call_progress={
+                                            "call_id": tid,
+                                            "bytes_received": current_size,
+                                            "last_delta_size": current_size - prev_size,
+                                        }
+                                    )
+                                    last_progress[tid] = current_size
             # 流式结束时统一输出聚合后的工具调用
             for _, v in partial_tools.items():
                 yield StreamEvent(type=Evt.tool_call, tool_call=normalize_tool_call(v))

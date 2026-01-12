@@ -7,7 +7,10 @@ import json
 class Evt(StrEnum):
     content = "content"
     thinking = "thinking"
-    tool_call = "tool_call"
+    tool_call_start = "tool_call_start"      # 工具调用开始（首次通知）
+    tool_call_delta = "tool_call_delta"      # 工具参数增量
+    tool_call_progress = "tool_call_progress"  # 工具参数接收进度
+    tool_call = "tool_call"                  # 工具调用完整（参数完整）
     usage = "usage"
     completed = "completed"
     error = "error"
@@ -85,6 +88,8 @@ class StreamEvent(BaseModel):
     type: Evt
     delta: str | None = None
     tool_call: ToolCall | None = None
+    tool_call_delta: dict | None = None      # 工具参数增量: {"call_id": str, "arguments_delta": str}
+    tool_call_progress: dict | None = None   # 工具参数进度: {"call_id": str, "bytes_received": int, "last_delta_size": int}
     usage: Usage | None = None
     error: str | None = None
     # OpenRouter: reasoning_details for Gemini 3 tool calling (emitted with completed event)
@@ -149,6 +154,15 @@ class StreamCollector:
             self._content_parts.append(event.delta)
         elif event.type == Evt.thinking and event.delta:
             self._thinking_parts.append(event.delta)
+        elif event.type == Evt.tool_call_start:
+            # tool_call_start 只是通知，不聚合
+            pass
+        elif event.type == Evt.tool_call_delta:
+            # tool_call_delta 只是中间状态，不聚合
+            pass
+        elif event.type == Evt.tool_call_progress:
+            # tool_call_progress 只是进度通知，不聚合
+            pass
         elif event.type == Evt.tool_call and event.tool_call:
             self._tool_calls.append(event.tool_call)
         elif event.type == Evt.usage and event.usage:

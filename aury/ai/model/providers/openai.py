@@ -309,6 +309,8 @@ class OpenAIAdapter:
                 payload.pop("stream_options", None)
                 stream = await self.async_client.chat.completions.create(**payload)
             partial_tools: dict[str, dict] = {}
+            notified_tools: set[str] = set()  # 记录已通知的工具
+            last_progress: dict[str, int] = {}  # 记录上次进度位置
             last_tid: str | None = None
             usage_emitted = False
             # Use async iteration to not block event loop
@@ -346,6 +348,25 @@ class OpenAIAdapter:
                         tid = getattr(tc, "id", None) or last_tid or "_last"
                         if getattr(tc, "id", None):
                             last_tid = tid
+                        
+                        # ⭐ 1. 首次通知 - tool_call_start
+                        if tid not in notified_tools:
+                            fn = getattr(tc, "function", None)
+                            tool_name = getattr(fn, "name", None) if fn else None
+                            
+                            if tool_name:
+                                # 第一次看到这个工具且有名称，立即通知
+                                yield StreamEvent(
+                                    type=Evt.tool_call_start,
+                                    tool_call=ToolCall(
+                                        id=tid,
+                                        name=tool_name,
+                                        arguments_json="",
+                                    )
+                                )
+                                notified_tools.add(tid)
+                                last_progress[tid] = 0
+                        
                         entry = partial_tools.setdefault(tid, {"id": tid, "name": "", "arguments": ""})
                         fn = getattr(tc, "function", None)
                         if fn is not None:
@@ -354,7 +375,33 @@ class OpenAIAdapter:
                             # arguments 可能是空字符串，用 is not None 而不是 truthy 检查
                             args_delta = getattr(fn, "arguments", None)
                             if args_delta is not None:
+                                # ⭐ 2. 参数增量 - tool_call_delta
+                                if args_delta:  # 非空才发送
+                                    yield StreamEvent(
+                                        type=Evt.tool_call_delta,
+                                        tool_call_delta={
+                                            "call_id": tid,
+                                            "arguments_delta": args_delta,
+                                        }
+                                    )
+                                
                                 entry["arguments"] += args_delta
+                                
+                                # ⭐ 3. 进度通知 - tool_call_progress
+                                current_size = len(entry["arguments"])
+                                prev_size = last_progress.get(tid, 0)
+                                
+                                # 每1KB发送一次进度
+                                if current_size - prev_size >= 1024:
+                                    yield StreamEvent(
+                                        type=Evt.tool_call_progress,
+                                        tool_call_progress={
+                                            "call_id": tid,
+                                            "bytes_received": current_size,
+                                            "last_delta_size": current_size - prev_size,
+                                        }
+                                    )
+                                    last_progress[tid] = current_size
             for _, v in partial_tools.items():
                 yield StreamEvent(type=Evt.tool_call, tool_call=normalize_tool_call(v))
             yield StreamEvent(type=Evt.completed)
