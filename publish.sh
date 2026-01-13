@@ -13,11 +13,14 @@
 #   需要先运行 ./build.sh 构建包，或确保 dist/ 目录存在
 #
 # Token 配置 (PyPI 已不支持密码登录，必须使用 API Token):
-#   方式 1: 环境变量 UV_PUBLISH_TOKEN (临时)
-#   方式 2: ~/.pypirc 文件 + keyring (推荐，永久)
+#   方式 1: keyring 配置 (推荐，永久)
+#           keyring set pypi __token__
+#           然后输入你的 PyPI Token
+#   方式 2: 环境变量 UV_PUBLISH_TOKEN (临时)
+#           export UV_PUBLISH_TOKEN='pypi-xxxx...'
 #
-# 注意: ~/.pypirc 配置已设置为自动从 keyring 读取凭据
-#      配置详见 ~/.pypirc 中的 password = %(keyring:pypi:__token__)s
+# 注意: uv publish 不支持从 ~/.pypirc 读取 keyring 配置
+#      脚本会自动从 keyring 读取 token 并传递给 uv publish
 
 set -e
 
@@ -86,7 +89,14 @@ setup_token() {
         # 检查 keyring 中是否已配置
         if keyring get pypi __token__ &>/dev/null; then
             info "检测到 keyring 中已配置 PyPI 凭据"
-            success "将使用 ~/.pypirc + keyring 进行认证"
+            # 从 keyring 读取 token
+            UV_PUBLISH_TOKEN=$(keyring get pypi __token__ 2>/dev/null)
+            if [ -n "$UV_PUBLISH_TOKEN" ]; then
+                success "已从 keyring 读取 PyPI Token"
+                export UV_PUBLISH_TOKEN
+            else
+                warning "keyring 中存在配置但无法读取 token"
+            fi
         else
             warning "未设置 UV_PUBLISH_TOKEN 环境变量，也未在 keyring 中配置凭据"
             info ""
@@ -137,13 +147,14 @@ publish() {
     info "开始上传..."
     
     # 构建 uv publish 命令
-    # ~/.pypirc 中的 password 配置为从 keyring 读取凭据
+    # uv publish 不支持从 ~/.pypirc 读取 keyring 配置
+    # 需要从 keyring 读取 token 后通过 --token 参数传递
     if [ "$TARGET" = "test" ]; then
         # 测试 PyPI
         if [ -n "$UV_PUBLISH_TOKEN" ]; then
             uv publish --publish-url "$pypi_url" --token "$UV_PUBLISH_TOKEN"
         else
-            # uv 会从 ~/.pypirc 读取凭据，自动从 keyring 获取 token
+            # 如果没有 token，uv 会提示输入
             uv publish --publish-url "$pypi_url"
         fi
     else
@@ -151,7 +162,7 @@ publish() {
         if [ -n "$UV_PUBLISH_TOKEN" ]; then
             uv publish --token "$UV_PUBLISH_TOKEN"
         else
-            # uv 会从 ~/.pypirc 读取凭据，自动从 keyring 获取 token
+            # 如果没有 token，uv 会提示输入
             uv publish
         fi
     fi
@@ -185,7 +196,7 @@ show_help() {
     echo ""
     echo "获取 Token: https://pypi.org/manage/account/token/"
     echo ""
-    echo "注意: ~/.pypirc 已配置为从 keyring 中读取凭据"
+    echo "注意: 脚本会自动从 keyring 读取 token 并传递给 uv publish"
 }
 
 # 主流程
