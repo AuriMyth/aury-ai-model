@@ -219,8 +219,8 @@ class OpenRouterAdapter(OpenAIAdapter):
             payload["extra_body"] = extra_body
 
         try:
-            # Use with_raw_response to get the original JSON (SDK doesn't expose reasoning_details)
-            raw_resp = self.client.chat.completions.with_raw_response.create(**payload)
+            # Use async client with with_raw_response to get the original JSON (SDK doesn't expose reasoning_details)
+            raw_resp = await self.async_client.chat.completions.with_raw_response.create(**payload)
             resp = raw_resp.parse()
             # Parse raw JSON to extract reasoning_details and thoughtSignature
             raw_json: dict = {}

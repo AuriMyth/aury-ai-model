@@ -91,7 +91,7 @@ class OpenAIAdapter:
             if tf := kw.get("text_format"):
                 payload["text"] = {"format": tf}
             try:
-                resp = self.client.responses.create(**payload)
+                resp = await self.async_client.responses.create(**payload)
             except Exception as e:
                 raise TransportError(str(e)) from e
             # usage
@@ -171,7 +171,7 @@ class OpenAIAdapter:
         if req.extra_body:
             payload.setdefault("extra_body", {}).update(req.extra_body)
         try:
-            resp = self.client.chat.completions.create(**payload)
+            resp = await self.async_client.chat.completions.create(**payload)
         except Exception as e:
             raise TransportError(str(e)) from e
         # usage (chat)
@@ -234,37 +234,38 @@ class OpenAIAdapter:
             if tf := kw.get("text_format"):
                 payload["text"] = {"format": tf}
             try:
-                stream = self.client.responses.stream(**payload)
-                # context manager in SDK; emulate basic iteration
-                with stream as s:
-                    for ev in s:
-                        t = getattr(ev, "type", None) or getattr(ev, "event", None) or ""
-                        # content delta
-                        if isinstance(t, str) and "output_text.delta" in t:
-                            delta = getattr(ev, "delta", None) or getattr(getattr(ev, "data", None), "delta", None) or ""
-                            if delta:
-                                yield StreamEvent(type=Evt.content, delta=str(delta))
-                        # reasoning delta
-                        if isinstance(t, str) and "reasoning.delta" in t and req.return_thinking:
-                            delta = getattr(ev, "delta", None) or getattr(getattr(ev, "data", None), "delta", None) or ""
-                            if delta:
-                                yield StreamEvent(type=Evt.thinking, delta=str(delta))
-                        # usage in completion event
-                        if isinstance(t, str) and ("response.completed" in t or "response.summary.delta" in t):
-                            try:
-                                final = s.get_final_response()
-                                u = getattr(final, "usage", None)
-                                if u is not None:
-                                    rt = getattr(getattr(u, "output_tokens_details", None), "reasoning_tokens", 0) or 0
-                                    yield StreamEvent(type=Evt.usage, usage=Usage(
-                                        input_tokens=getattr(u, "input_tokens", 0) or 0,
-                                        output_tokens=getattr(u, "output_tokens", 0) or 0,
-                                        reasoning_tokens=rt,
-                                        total_tokens=getattr(u, "total_tokens", 0) or 0,
-                                    ))
-                            except Exception:
-                                pass
-                    yield StreamEvent(type=Evt.completed)
+                # Use async client to avoid blocking event loop
+                stream = await self.async_client.responses.stream(**payload)
+                # Use async iteration
+                async for ev in stream:
+                    t = getattr(ev, "type", None) or getattr(ev, "event", None) or ""
+                    # content delta
+                    if isinstance(t, str) and "output_text.delta" in t:
+                        delta = getattr(ev, "delta", None) or getattr(getattr(ev, "data", None), "delta", None) or ""
+                        if delta:
+                            yield StreamEvent(type=Evt.content, delta=str(delta))
+                    # reasoning delta
+                    if isinstance(t, str) and "reasoning.delta" in t and req.return_thinking:
+                        delta = getattr(ev, "delta", None) or getattr(getattr(ev, "data", None), "delta", None) or ""
+                        if delta:
+                            yield StreamEvent(type=Evt.thinking, delta=str(delta))
+                    # usage in completion event
+                    if isinstance(t, str) and ("response.completed" in t or "response.summary.delta" in t):
+                        try:
+                            # Note: In async streaming, we might not have get_final_response()
+                            # Extract usage from the event itself if available
+                            u = getattr(ev, "usage", None)
+                            if u is not None:
+                                rt = getattr(getattr(u, "output_tokens_details", None), "reasoning_tokens", 0) or 0
+                                yield StreamEvent(type=Evt.usage, usage=Usage(
+                                    input_tokens=getattr(u, "input_tokens", 0) or 0,
+                                    output_tokens=getattr(u, "output_tokens", 0) or 0,
+                                    reasoning_tokens=rt,
+                                    total_tokens=getattr(u, "total_tokens", 0) or 0,
+                                ))
+                        except Exception:
+                            pass
+                yield StreamEvent(type=Evt.completed)
             except Exception as e:
                 raise TransportError(str(e)) from e
             return
