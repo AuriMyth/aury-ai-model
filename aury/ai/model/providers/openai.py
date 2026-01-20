@@ -238,6 +238,7 @@ class OpenAIAdapter:
                 stream = await self.async_client.responses.stream(**payload)
                 # Use async iteration
                 async for ev in stream:
+                    print(ev)
                     t = getattr(ev, "type", None) or getattr(ev, "event", None) or ""
                     # content delta
                     if isinstance(t, str) and "output_text.delta" in t:

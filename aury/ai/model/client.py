@@ -82,7 +82,7 @@ class ModelClient(BaseModel):
                 emit_end(metrics, error=e)
                 raise
 
-    async def astream(self, messages: list[Message], *, provider: str | None=None, model: str | None=None, headers: dict | None=None, yield_usage_event: bool=False, **kw) -> AsyncIterator[StreamEvent]:
+    async def astream(self, messages: list[Message], *, provider: str | None=None, model: str | None=None, headers: dict | None=None, yield_usage_event: bool=True, **kw) -> AsyncIterator[StreamEvent]:
         b = self._resolve_binding(provider, model, headers)
         metrics = emit_start(b["provider"], b["model"])
         async with aset_ctx(provider=b["provider"], model=b["model"], extra_headers=b["headers"]):
