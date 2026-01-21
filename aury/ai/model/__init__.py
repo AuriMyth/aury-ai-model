@@ -2,8 +2,12 @@
 
 统一、高可靠的 LLM 调用层。
 """
+import logging
 
 __version__ = "0.1.0"
+
+# 统一 logger
+logger = logging.getLogger("aury.ai.model")
 
 from .client import ModelClient
 from .types import (

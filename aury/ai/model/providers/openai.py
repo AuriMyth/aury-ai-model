@@ -11,6 +11,7 @@ from ..errors import (
     ModelTimeoutError, RateLimitError, ModelOverloadedError,
     InvalidRequestError, TransportError,
 )
+from .. import logger
 
 class OpenAIAdapter:
     name = "openai"
@@ -33,12 +34,106 @@ class OpenAIAdapter:
         return ProviderRoute(channel="chat", reason="chat_default")
 
     def _to_messages(self, messages: list[Message]) -> list[dict]:
-        """映射到 OpenAI ChatCompletions messages，补齐 tool_call_id / tool_calls（用于多轮工具链路）。"""
+        """映射到 OpenAI ChatCompletions messages。
+        
+        Claude 模型（带 thinking）使用 Anthropic/Bedrock 格式：
+        - content 数组格式包含 thinking blocks
+        - thinking 必须在 content 数组最前面
+        - tool_use 在 thinking 之后
+        - tool_result 使用 role="user" + tool_result block
+        
+        其他模型使用标准 OpenAI 格式：
+        - content 为字符串
+        - tool_calls 为独立字段
+        - 完全忽略 Thinking blocks
+        """
+        import json as _json
+        
+        is_claude = "claude" in self.model.lower()
+        # Claude 且消息中有 thinking 时使用 Anthropic 格式
+        use_anthropic_format = is_claude and any(
+            any(isinstance(p, Thinking) for p in m.parts)
+            for m in messages
+        )
+        
+        if use_anthropic_format:
+            return self._to_messages_anthropic(messages)
+        else:
+            return self._to_messages_openai(messages)
+    
+    def _to_messages_anthropic(self, messages: list[Message]) -> list[dict]:
+        """Claude/Bedrock 格式：thinking + tool_use 在 content 数组中。"""
+        import json as _json
         out: list[dict] = []
+        
         for m in messages:
             item: dict = {"role": m.role}
-
-            # tool 消息：必须带 tool_call_id，content 为字符串
+            
+            # tool 消息 -> user + tool_result
+            if m.role == "tool":
+                text = "".join(p.text for p in m.parts if isinstance(p, Text))
+                item["role"] = "user"
+                item["content"] = [
+                    {"type": "text", "text": text or "工具返回"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": m.tool_call_id or "",
+                        "content": text,
+                    }
+                ]
+                out.append(item)
+                continue
+            
+            # 构建 content 数组
+            parts: list[dict] = []
+            
+            # 1. thinking 必须在最前面
+            for p in m.parts:
+                if isinstance(p, Thinking) and p.text:
+                    parts.append({"type": "thinking", "thinking": p.text})
+            
+            # 2. text 内容
+            for p in m.parts:
+                if isinstance(p, Text) and p.text:
+                    parts.append({"type": "text", "text": p.text})
+            
+            # 3. 图片
+            for p in m.parts:
+                if isinstance(p, Image):
+                    parts.append({"type": "image_url", "image_url": {"url": p.url}})
+            
+            # 4. assistant 消息：tool_use 在最后
+            if m.role == "assistant" and m.tool_calls:
+                # 确保有 text（Bedrock 要求）
+                if not any(isinstance(p, Text) and p.text for p in m.parts):
+                    parts.append({"type": "text", "text": "调用工具"})
+                
+                for tc in m.tool_calls:
+                    try:
+                        args = _json.loads(tc.arguments_json or "{}")
+                    except Exception:
+                        args = {}
+                    parts.append({
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.name,
+                        "input": args,
+                    })
+            
+            item["content"] = parts if parts else None
+            out.append(item)
+        
+        return out
+    
+    def _to_messages_openai(self, messages: list[Message]) -> list[dict]:
+        """标准 OpenAI 格式：完全忽略 Thinking blocks。"""
+        out: list[dict] = []
+        
+        for m in messages:
+            item: dict = {"role": m.role}
+            has_images = any(isinstance(p, Image) for p in m.parts)
+            
+            # tool 消息
             if m.role == "tool":
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
                 item["content"] = text
@@ -46,8 +141,8 @@ class OpenAIAdapter:
                     item["tool_call_id"] = m.tool_call_id
                 out.append(item)
                 continue
-
-            # assistant 消息：如果包含 tool_calls，需要回传给 API 以配合后续 tool 消息
+            
+            # assistant 消息的 tool_calls
             if m.role == "assistant" and m.tool_calls:
                 item["tool_calls"] = [
                     {
@@ -57,22 +152,24 @@ class OpenAIAdapter:
                     }
                     for tc in m.tool_calls
                 ]
-
-            # 如果有图片，用 content parts；否则纯文本
-            if any(isinstance(p, Image) for p in m.parts):
+            
+            # content 处理
+            if has_images:
+                # 图片用数组格式（只包含 text 和 image，忽略 Thinking）
                 parts: list[dict] = []
                 for p in m.parts:
-                    if isinstance(p, Text):
+                    if isinstance(p, Text) and p.text:
                         parts.append({"type": "text", "text": p.text})
                     elif isinstance(p, Image):
                         parts.append({"type": "image_url", "image_url": {"url": p.url}})
-                    # Thinking 不发送
-                item["content"] = parts
+                item["content"] = parts if parts else None
             else:
+                # 纯文本（忽略 Thinking）
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
-                item["content"] = text
-
+                item["content"] = text or None
+            
             out.append(item)
+        
         return out
 
     async def ainvoke(self, messages: list[Message], req: RequestFeatures, **kw) -> Message:
@@ -164,16 +261,24 @@ class OpenAIAdapter:
             payload["response_format"] = req.response_format
         if tools := kw.get("tools"):
             payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
-        # Reasoning/thinking support (OpenAI o-series / GPT-5)
-        if req.reasoning_effort:
+        # Only for Claude models (claude-* or anthropic provider)
+        is_claude = "claude" in self.model.lower()
+        # Reasoning/thinking support
+        # For Claude via NewAPI: use reasoning_effort which maps to thinking mode
+        # For OpenAI o-series: use reasoning_effort directly
+        if req.return_thinking and is_claude:
+            # NewAPI uses reasoning_effort for Claude thinking mode
+            payload["reasoning_effort"] = req.reasoning_effort or "medium"
+        elif req.reasoning_effort:
             payload["reasoning_effort"] = req.reasoning_effort
-        # Merge user-provided extra_body (provider-specific options)
+        # Merge user-provided extra_body (provider-specific options, can override above)
         if req.extra_body:
             payload.setdefault("extra_body", {}).update(req.extra_body)
         try:
             resp = await self.async_client.chat.completions.create(**payload)
         except Exception as e:
             raise TransportError(str(e)) from e
+        logger.debug("[ainvoke] model=%s resp=%s", self.model, resp)
         # usage (chat)
         try:
             u = getattr(resp, "usage", None)
@@ -271,9 +376,12 @@ class OpenAIAdapter:
                 raise TransportError(str(e)) from e
             return
         # --- Chat streaming path (using async client to avoid blocking event loop) ---
+        converted_messages = self._to_messages(messages)
+        logger.debug("[astream] model=%s messages=%s", self.model, converted_messages)
+        
         payload = dict(
             model=self.model,
-            messages=self._to_messages(messages),
+            messages=converted_messages,
             stream=True,
             extra_headers={**self.headers, **get_ctx().extra_headers},
         )
@@ -296,12 +404,20 @@ class OpenAIAdapter:
             payload["response_format"] = req.response_format
         if tools := kw.get("tools"):
             payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
-        # Reasoning/thinking support (OpenAI o-series / GPT-5)
-        if req.reasoning_effort:
+        # Only for Claude models (claude-* or anthropic provider)
+        is_claude = "claude" in self.model.lower()
+        # Reasoning/thinking support
+        # For Claude via NewAPI: use reasoning_effort which maps to thinking mode
+        # For OpenAI o-series: use reasoning_effort directly
+        if req.return_thinking and is_claude:
+            # NewAPI uses reasoning_effort for Claude thinking mode
+            payload["reasoning_effort"] = req.reasoning_effort or "medium"
+        elif req.reasoning_effort:
             payload["reasoning_effort"] = req.reasoning_effort
-        # Merge user-provided extra_body (provider-specific options)
+        # Merge user-provided extra_body (provider-specific options, can override above)
         if req.extra_body:
             payload.setdefault("extra_body", {}).update(req.extra_body)
+        
         try:
             try:
                 # Use async client to avoid blocking event loop during streaming
@@ -317,6 +433,7 @@ class OpenAIAdapter:
             usage_emitted = False
             # Use async iteration to not block event loop
             async for chunk in stream:
+                logger.debug("[astream] chunk=%s", chunk)
                 # 某些实现会在最后一个 chunk 仅带 usage，而没有 choices
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:
@@ -343,6 +460,10 @@ class OpenAIAdapter:
                     reasoning_delta = getattr(ch, "reasoning_content", None)
                     if reasoning_delta:
                         yield StreamEvent(type=Evt.thinking, delta=reasoning_delta)
+                    # Claude thinking (may be in 'thinking' attribute)
+                    thinking_delta = getattr(ch, "thinking", None)
+                    if thinking_delta:
+                        yield StreamEvent(type=Evt.thinking, delta=thinking_delta)
                 if getattr(ch, "content", None):
                     yield StreamEvent(type=Evt.content, delta=ch.content)
                 if getattr(ch, "tool_calls", None):
