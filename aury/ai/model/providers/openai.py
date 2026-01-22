@@ -1,4 +1,5 @@
 from __future__ import annotations
+from re import DEBUG
 from typing import AsyncIterator
 from pydantic import BaseModel
 from openai import OpenAI, AsyncOpenAI
@@ -11,7 +12,7 @@ from ..errors import (
     ModelTimeoutError, RateLimitError, ModelOverloadedError,
     InvalidRequestError, TransportError,
 )
-from .. import logger
+from .. import logger, TRACE
 
 class OpenAIAdapter:
     name = "openai"
@@ -343,7 +344,6 @@ class OpenAIAdapter:
                 stream = await self.async_client.responses.stream(**payload)
                 # Use async iteration
                 async for ev in stream:
-                    print(ev)
                     t = getattr(ev, "type", None) or getattr(ev, "event", None) or ""
                     # content delta
                     if isinstance(t, str) and "output_text.delta" in t:
@@ -404,6 +404,9 @@ class OpenAIAdapter:
             payload["response_format"] = req.response_format
         if tools := kw.get("tools"):
             payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
+            # Debug: log full tools payload for troubleshooting
+            import json
+            logger.debug("[astream] tools payload: %s", json.dumps(payload["tools"], ensure_ascii=False, indent=2))
         # Only for Claude models (claude-* or anthropic provider)
         is_claude = "claude" in self.model.lower()
         # Reasoning/thinking support
@@ -431,9 +434,13 @@ class OpenAIAdapter:
             last_progress: dict[str, int] = {}  # 记录上次进度位置
             last_tid: str | None = None
             usage_emitted = False
+            chunk_count = 0
             # Use async iteration to not block event loop
             async for chunk in stream:
-                logger.debug("[astream] chunk=%s", chunk)
+                chunk_count += 1
+                # TRACE 级别 + 采样：首个 chunk 和每 50 个 chunk 记录一次
+                if chunk_count == 1 or chunk_count % 50 == 0:
+                    logger.log(DEBUG, "[astream] chunk #%d: %s", chunk_count, chunk)
                 # 某些实现会在最后一个 chunk 仅带 usage，而没有 choices
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:

@@ -36,6 +36,62 @@ class ToolSpec(BaseModel):
 
 # ---- mapping helpers ----
 
+def _normalize_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSON Schema to be compatible with JSON Schema 2020-12.
+    
+    Ensures:
+    - Every schema has a 'type' field
+    - object type has 'properties' field
+    - object type has 'required' field
+    - nested schemas are also normalized
+    """
+    if not isinstance(schema, dict):
+        return schema
+    
+    result = dict(schema)
+    
+    # Ensure type field exists and is valid (JSON Schema 2020-12 requirement)
+    # Valid types: string, number, integer, boolean, object, array, null
+    valid_types = {"string", "number", "integer", "boolean", "object", "array", "null"}
+    
+    if "type" not in result:
+        # Infer type from other fields or default to string
+        if "properties" in result or "additionalProperties" in result:
+            result["type"] = "object"
+        elif "items" in result:
+            result["type"] = "array"
+        elif "enum" in result:
+            # enum can be any type, keep as-is (type is optional for enum)
+            pass
+        else:
+            result["type"] = "string"  # Safe default
+    elif result["type"] not in valid_types:
+        # Convert invalid types (e.g. "file") to string
+        result["type"] = "string"
+    
+    # If type is object, ensure properties and required exist
+    if result.get("type") == "object":
+        if "properties" not in result:
+            result["properties"] = {}
+        if "required" not in result:
+            result["required"] = []
+        # Normalize nested property schemas
+        if isinstance(result.get("properties"), dict):
+            result["properties"] = {
+                k: _normalize_schema(v) for k, v in result["properties"].items()
+            }
+    
+    # Normalize array items
+    if result.get("type") == "array" and "items" in result:
+        result["items"] = _normalize_schema(result["items"])
+    
+    # Normalize additionalProperties if it's a schema
+    if isinstance(result.get("additionalProperties"), dict):
+        result["additionalProperties"] = _normalize_schema(result["additionalProperties"])
+    
+    return result
+
+
 def to_openai_tools(tools: list[ToolSpec], *, supports_mcp_native: bool=False) -> list[dict]:
     out: list[dict] = []
     for t in tools:
@@ -43,17 +99,17 @@ def to_openai_tools(tools: list[ToolSpec], *, supports_mcp_native: bool=False) -
             out.append({"type":"function","function":{
                 "name": t.function.name,
                 "description": t.function.description or "",
-                "parameters": t.function.parameters,
+                "parameters": _normalize_schema(t.function.parameters),
             }})
         elif t.kind == ToolKind.mcp and t.mcp:
             if supports_mcp_native:
                 out.append({"type":"mcp","server": t.mcp.server_id,
-                            "name": t.mcp.name, "parameters": t.mcp.input_schema})
+                            "name": t.mcp.name, "parameters": _normalize_schema(t.mcp.input_schema)})
             else:
                 enc = f"mcp::{t.mcp.server_id}::{t.mcp.name}"
                 desc = (t.mcp.description or "") + f" [MCP server={t.mcp.server_id}]"
                 out.append({"type":"function","function":{
-                    "name": enc, "description": desc, "parameters": t.mcp.input_schema
+                    "name": enc, "description": desc, "parameters": _normalize_schema(t.mcp.input_schema)
                 }})
         elif t.kind == ToolKind.builtin and t.builtin:
             item = {"type": t.builtin.type}
