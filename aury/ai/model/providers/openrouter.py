@@ -17,12 +17,20 @@ class OpenRouterAdapter(OpenAIAdapter):
     """
     name = "openrouter"
 
-    def __init__(self, model: str, base_url: str | None, api_key: str | None, headers: dict | None = None):
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None,
+        api_key: str | None,
+        headers: dict | None = None,
+        timeout: float | None = None,
+    ):
         super().__init__(
             model=model,
             base_url=base_url or "https://openrouter.ai/api/v1",
             api_key=api_key,
             headers=headers,
+            timeout=timeout,
         )
 
     def _to_messages(self, messages: list[Message]) -> list[dict]:

@@ -19,6 +19,7 @@ class ModelClient(BaseModel):
     api_key: str | None = None
     headers: dict = {}
     transport: str | None = None  # e.g. "chat" | "responses" | provider-specific
+    timeout: float | None = None  # Request timeout in seconds (None = use provider default)
     # Default generation parameters (can be overridden per-call)
     default_max_tokens: int | None = None
     default_temperature: float | None = None
@@ -137,6 +138,7 @@ class ModelClient(BaseModel):
             "api_key": self.api_key,
             "headers": merged_headers,
             "transport": self.transport,
+            "timeout": self.timeout,
         }
 
     def _features_from(self, messages: list[Message], **kw) -> RequestFeatures:

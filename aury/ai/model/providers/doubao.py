@@ -8,10 +8,21 @@ from ..instrumentation import set_usage
 from ..tools import to_openai_tools, normalize_tool_call
 from ..context import get_ctx
 
+# Default timeout for Doubao: 30s connect, 10min read
+DEFAULT_DOUBAO_TIMEOUT = 600.0
+
+
 class DoubaoArkAdapter:
     name = "doubao"
 
-    def __init__(self, model: str, base_url: str | None, api_key: str | None, headers: dict | None=None):
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None,
+        api_key: str | None,
+        headers: dict | None = None,
+        timeout: float | None = None,
+    ):
         spec = importlib.util.find_spec("volcenginesdkarkruntime")
         if spec is None:
             raise ProviderNotInstalledError("Install VolcEngine SDK: pip install 'volcengine-python-sdk[ark]'")
@@ -22,7 +33,14 @@ class DoubaoArkAdapter:
             raise ProviderNotInstalledError(
                 "VolcEngine SDK missing AsyncArk. Please upgrade: pip install -U 'volcengine-python-sdk[ark]'"
             )
-        self.client = async_cls(base_url=base_url or "https://ark.cn-beijing.volces.com/api/v3", api_key=api_key)
+        
+        # Timeout config
+        client_timeout = timeout if timeout is not None else DEFAULT_DOUBAO_TIMEOUT
+        self.client = async_cls(
+            base_url=base_url or "https://ark.cn-beijing.volces.com/api/v3",
+            api_key=api_key,
+            timeout=client_timeout,
+        )
         self.model = model
         self.headers = headers or {}
 

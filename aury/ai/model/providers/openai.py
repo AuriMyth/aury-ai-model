@@ -1,8 +1,8 @@
 from __future__ import annotations
-from re import DEBUG
+from logging import DEBUG
 from typing import AsyncIterator
 from pydantic import BaseModel
-from openai import OpenAI, AsyncOpenAI
+from openai import OpenAI, AsyncOpenAI, Timeout as OpenAITimeout
 from ..types import Message, StreamEvent, Evt, Text, Image, Thinking, ToolCall, Usage
 from ..tools import to_openai_tools, normalize_tool_call
 from ..instrumentation import set_usage
@@ -14,18 +14,40 @@ from ..errors import (
 )
 from .. import logger, TRACE
 
+# Default timeout: 30s connect, 10min read (for long streaming responses)
+DEFAULT_TIMEOUT = OpenAITimeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
+
+
 class OpenAIAdapter:
     name = "openai"
 
-    def __init__(self, model: str, base_url: str | None, api_key: str | None, headers: dict | None=None, transport: str | None=None):
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None,
+        api_key: str | None,
+        headers: dict | None = None,
+        transport: str | None = None,
+        timeout: float | OpenAITimeout | None = None,
+    ):
         self.model = model
         self.base_url = base_url
         self.api_key = api_key
         self.headers = headers or {}
         self.transport = (transport or "chat").lower()
-        # Use both sync and async clients
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
-        self.async_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        
+        # Build timeout config
+        if timeout is None:
+            client_timeout = DEFAULT_TIMEOUT
+        elif isinstance(timeout, (int, float)):
+            # Single value: use as read timeout, keep defaults for others
+            client_timeout = OpenAITimeout(connect=30.0, read=float(timeout), write=60.0, pool=30.0)
+        else:
+            client_timeout = timeout
+        
+        # Use both sync and async clients with timeout
+        self.client = OpenAI(base_url=base_url, api_key=api_key, timeout=client_timeout)
+        self.async_client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=client_timeout)
 
     def route(self, req: RequestFeatures) -> ProviderRoute:
         # 只有在明确指定 transport="responses" 时才使用 responses
@@ -70,18 +92,11 @@ class OpenAIAdapter:
         for m in messages:
             item: dict = {"role": m.role}
             
-            # tool 消息 -> user + tool_result
+            # tool 消息 -> 转为普通 user 消息
             if m.role == "tool":
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
                 item["role"] = "user"
-                item["content"] = [
-                    {"type": "text", "text": text or "工具返回"},
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": m.tool_call_id or "",
-                        "content": text,
-                    }
-                ]
+                item["content"] = [{"type": "text", "text": f"[工具返回结果]\n{text}"}]
                 out.append(item)
                 continue
             
@@ -120,6 +135,15 @@ class OpenAIAdapter:
                         "name": tc.name,
                         "input": args,
                     })
+            
+            # 5. Bedrock 要求：assistant 消息如果只有 thinking（无 text/tool_use），需要添加占位文本
+            # 否则会报错：all messages must have non-empty content except for the optional final assistant message
+            if m.role == "assistant" and parts:
+                has_text_or_tool = any(
+                    p.get("type") in ("text", "tool_use") for p in parts
+                )
+                if not has_text_or_tool:
+                    parts.append({"type": "text", "text": "(思考中)"})
             
             item["content"] = parts if parts else None
             out.append(item)
