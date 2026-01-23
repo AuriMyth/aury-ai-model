@@ -164,6 +164,9 @@ class OpenAIAdapter:
                 item["content"] = text
                 if m.tool_call_id:
                     item["tool_call_id"] = m.tool_call_id
+                # name is required for Gemini compatibility via OneAPI/NewAPI
+                # fallback to "_tool_response_" if not provided (avoid "unknown" as Gemini may treat it as a tool name)
+                item["name"] = m.name or "_tool_response_"
                 out.append(item)
                 continue
             

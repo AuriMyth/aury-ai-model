@@ -132,11 +132,19 @@ class msg:  # convenience constructors
         )
 
     @staticmethod
-    def tool(result: str, *, tool_call_id: str) -> Message:
+    def tool(result: str, *, tool_call_id: str, name: str | None = None) -> Message:
+        """Create a tool response message.
+        
+        Args:
+            result: The tool execution result.
+            tool_call_id: The ID of the tool call this responds to.
+            name: The tool name (required for Gemini compatibility via OneAPI/NewAPI).
+        """
         return Message(
             role=Role.tool,
             parts=[Text(text=result)],
             tool_call_id=tool_call_id,
+            name=name,
         )
 
 
