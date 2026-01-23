@@ -112,23 +112,29 @@ class DoubaoArkAdapter:
         return out or None
 
     def _to_usage(self, u: Any) -> Usage:
-        """兼容 OpenAI/Ark 的 usage 表达（对象或 dict），并尽量提取 reasoning_tokens。"""
+        """兼容 OpenAI/Ark 的 usage 表达（对象或 dict），并尽量提取 reasoning_tokens 和 cache tokens。"""
         if u is None:
             return Usage()
         # dict style
         if isinstance(u, dict):
             details = u.get("completion_tokens_details") or u.get("output_tokens_details") or {}
             rt = 0
+            cache_read = 0
             if isinstance(details, dict):
                 rt = details.get("reasoning_tokens", 0) or 0
+            ptd = u.get("prompt_tokens_details") or {}
+            if isinstance(ptd, dict):
+                cache_read = ptd.get("cached_tokens", 0) or 0
             return Usage(
                 input_tokens=u.get("prompt_tokens", 0) or u.get("input_tokens", 0) or 0,
                 output_tokens=u.get("completion_tokens", 0) or u.get("output_tokens", 0) or 0,
                 reasoning_tokens=rt,
+                cache_read_tokens=cache_read,
                 total_tokens=u.get("total_tokens", 0) or 0,
             )
         # object style
         rt = 0
+        cache_read = 0
         try:
             det = getattr(u, "completion_tokens_details", None) or getattr(u, "output_tokens_details", None)
             if det is not None:
@@ -137,11 +143,21 @@ class DoubaoArkAdapter:
                 else:
                     rt = getattr(det, "reasoning_tokens", 0) or 0
         except Exception:
-            rt = 0
+            pass
+        try:
+            ptd = getattr(u, "prompt_tokens_details", None)
+            if ptd is not None:
+                if isinstance(ptd, dict):
+                    cache_read = ptd.get("cached_tokens", 0) or 0
+                else:
+                    cache_read = getattr(ptd, "cached_tokens", 0) or 0
+        except Exception:
+            pass
         return Usage(
             input_tokens=getattr(u, "prompt_tokens", 0) or getattr(u, "input_tokens", 0) or 0,
             output_tokens=getattr(u, "completion_tokens", 0) or getattr(u, "output_tokens", 0) or 0,
             reasoning_tokens=rt,
+            cache_read_tokens=cache_read,
             total_tokens=getattr(u, "total_tokens", 0) or 0,
         )
 

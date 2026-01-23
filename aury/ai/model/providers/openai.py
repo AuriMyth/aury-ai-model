@@ -285,7 +285,7 @@ class OpenAIAdapter:
         if req.response_format:
             payload["response_format"] = req.response_format
         if tools := kw.get("tools"):
-            payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
+            payload["tools"] = to_openai_tools(tools, supports_mcp_native=False, model=self.model)
         # Only for Claude models (claude-* or anthropic provider)
         is_claude = "claude" in self.model.lower()
         # Reasoning/thinking support
@@ -427,7 +427,7 @@ class OpenAIAdapter:
         if req.response_format:
             payload["response_format"] = req.response_format
         if tools := kw.get("tools"):
-            payload["tools"] = to_openai_tools(tools, supports_mcp_native=False)
+            payload["tools"] = to_openai_tools(tools, supports_mcp_native=False, model=self.model)
             # Debug: log full tools payload for troubleshooting
             import json
             logger.debug("[astream] tools payload: %s", json.dumps(payload["tools"], ensure_ascii=False, indent=2))
@@ -469,14 +469,31 @@ class OpenAIAdapter:
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:
                     rt = 0
+                    cache_read = 0
+                    cache_write = 0
                     try:
+                        # reasoning_tokens from completion_tokens_details
                         rt = getattr(getattr(u, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
                     except Exception:
-                        rt = 0
+                        pass
+                    try:
+                        # cache tokens from prompt_tokens_details
+                        ptd = getattr(u, "prompt_tokens_details", None)
+                        if ptd:
+                            cache_read = getattr(ptd, "cached_tokens", 0) or 0
+                        # Claude via NewAPI: claude_cache_* fields
+                        if cache_read == 0:
+                            cache_read = getattr(u, "claude_cache_read_tokens", 0) or 0
+                        cache_write = getattr(u, "claude_cache_creation_5_m_tokens", 0) or 0
+                        cache_write += getattr(u, "claude_cache_creation_1_h_tokens", 0) or 0
+                    except Exception:
+                        pass
                     yield StreamEvent(type=Evt.usage, usage=Usage(
                         input_tokens=getattr(u, "prompt_tokens", 0) or 0,
                         output_tokens=getattr(u, "completion_tokens", 0) or 0,
                         reasoning_tokens=rt,
+                        cache_read_tokens=cache_read,
+                        cache_write_tokens=cache_write,
                         total_tokens=getattr(u, "total_tokens", 0) or 0,
                     ))
                     usage_emitted = True

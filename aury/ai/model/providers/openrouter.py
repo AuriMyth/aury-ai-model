@@ -244,14 +244,22 @@ class OpenRouterAdapter(OpenAIAdapter):
             u = getattr(resp, "usage", None)
             if u is not None:
                 rt = 0
+                cache_read = 0
                 try:
                     rt = getattr(getattr(u, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
                 except Exception:
-                    rt = 0
+                    pass
+                try:
+                    ptd = getattr(u, "prompt_tokens_details", None)
+                    if ptd:
+                        cache_read = getattr(ptd, "cached_tokens", 0) or 0
+                except Exception:
+                    pass
                 set_usage(Usage(
                     input_tokens=getattr(u, "prompt_tokens", 0) or 0,
                     output_tokens=getattr(u, "completion_tokens", 0) or 0,
                     reasoning_tokens=rt,
+                    cache_read_tokens=cache_read,
                     total_tokens=getattr(u, "total_tokens", 0) or 0,
                 ))
         except Exception:
@@ -378,14 +386,22 @@ class OpenRouterAdapter(OpenAIAdapter):
                 u = getattr(chunk, "usage", None)
                 if u is not None and not usage_emitted:
                     rt = 0
+                    cache_read = 0
                     try:
                         rt = getattr(getattr(u, "completion_tokens_details", None), "reasoning_tokens", 0) or 0
                     except Exception:
-                        rt = 0
+                        pass
+                    try:
+                        ptd = getattr(u, "prompt_tokens_details", None)
+                        if ptd:
+                            cache_read = getattr(ptd, "cached_tokens", 0) or 0
+                    except Exception:
+                        pass
                     yield StreamEvent(type=Evt.usage, usage=Usage(
                         input_tokens=getattr(u, "prompt_tokens", 0) or 0,
                         output_tokens=getattr(u, "completion_tokens", 0) or 0,
                         reasoning_tokens=rt,
+                        cache_read_tokens=cache_read,
                         total_tokens=getattr(u, "total_tokens", 0) or 0,
                     ))
                     usage_emitted = True

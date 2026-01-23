@@ -80,6 +80,8 @@ class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     total_tokens: int = 0
     estimated: bool = False
 
