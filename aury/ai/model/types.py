@@ -76,6 +76,11 @@ class Message(BaseModel):
     # OpenRouter: reasoning_details must be preserved and passed back for tool calling
     reasoning_details: list[dict] | None = None
 
+    @property
+    def text(self) -> str:
+        """Convenience: extract all text content from parts (Text and Thinking)."""
+        return "".join(p.text for p in self.parts if hasattr(p, "text"))
+
 class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
