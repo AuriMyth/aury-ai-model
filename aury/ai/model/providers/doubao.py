@@ -259,6 +259,8 @@ class DoubaoArkAdapter:
             last_progress: dict[str, int] = {}  # 记录上次进度位置
             usage_emitted = False
             last_tid: str | None = None
+            has_thinking = False
+            thinking_completed_emitted = False
             async for chunk in stream:
                 # Ark/OpenAI 兼容 SDK：优先用 model_dump() 解析，避免属性缺失导致 usage 丢失
                 d = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
@@ -273,11 +275,18 @@ class DoubaoArkAdapter:
                     if not choices:
                         continue
                     delta = (choices[0] or {}).get("delta") or {}
-                    if delta.get("content"):
-                        yield StreamEvent(type=Evt.content, delta=delta["content"])
                     if req.return_thinking and delta.get("reasoning_content"):
+                        has_thinking = True
                         yield StreamEvent(type=Evt.thinking, delta=delta["reasoning_content"])
+                    if delta.get("content"):
+                        if has_thinking and not thinking_completed_emitted:
+                            yield StreamEvent(type=Evt.thinking_completed)
+                            thinking_completed_emitted = True
+                        yield StreamEvent(type=Evt.content, delta=delta["content"])
                     if delta.get("tool_calls"):
+                        if has_thinking and not thinking_completed_emitted:
+                            yield StreamEvent(type=Evt.thinking_completed)
+                            thinking_completed_emitted = True
                         for tc in delta["tool_calls"]:
                             fn = tc.get("function") or {}
                             tid = tc.get("id") or last_tid or "_last"
@@ -343,11 +352,18 @@ class DoubaoArkAdapter:
                 delta = getattr(chunk.choices[0], "delta", None)
                 if delta is None:
                     continue
-                if getattr(delta, "content", None):
-                    yield StreamEvent(type=Evt.content, delta=delta.content)
                 if getattr(delta, "reasoning_content", None) and req.return_thinking:
+                    has_thinking = True
                     yield StreamEvent(type=Evt.thinking, delta=delta.reasoning_content)
+                if getattr(delta, "content", None):
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
+                    yield StreamEvent(type=Evt.content, delta=delta.content)
                 if getattr(delta, "tool_calls", None):
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
                     for tc in delta.tool_calls:
                         fn = getattr(tc, "function", None)
                         tid = getattr(tc, "id", None) or last_tid or "_last"

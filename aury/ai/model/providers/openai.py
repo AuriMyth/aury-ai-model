@@ -153,6 +153,7 @@ class OpenAIAdapter:
     def _to_messages_openai(self, messages: list[Message]) -> list[dict]:
         """标准 OpenAI 格式：完全忽略 Thinking blocks。"""
         out: list[dict] = []
+        is_kimi = "kimi" in self.model.lower() or "moonshot" in self.model.lower()
         
         for m in messages:
             item: dict = {"role": m.role}
@@ -180,6 +181,13 @@ class OpenAIAdapter:
                     }
                     for tc in m.tool_calls
                 ]
+            
+            # Kimi: Thinking parts -> reasoning_content for multi-turn tool calling
+            # When thinking is enabled, assistant messages must include reasoning_content
+            if is_kimi and m.role == "assistant":
+                thinking_text = "".join(p.text for p in m.parts if isinstance(p, Thinking) and p.text)
+                if thinking_text:
+                    item["reasoning_content"] = thinking_text
             
             # content 处理
             if has_images:
@@ -462,6 +470,8 @@ class OpenAIAdapter:
             last_tid: str | None = None
             usage_emitted = False
             chunk_count = 0
+            has_thinking = False  # 是否有 thinking 内容
+            thinking_completed_emitted = False  # 是否已发出 thinking_completed
             # Use async iteration to not block event loop
             async for chunk in stream:
                 chunk_count += 1
@@ -510,14 +520,24 @@ class OpenAIAdapter:
                 if req.return_thinking:
                     reasoning_delta = getattr(ch, "reasoning_content", None)
                     if reasoning_delta:
+                        has_thinking = True
                         yield StreamEvent(type=Evt.thinking, delta=reasoning_delta)
                     # Claude thinking (may be in 'thinking' attribute)
                     thinking_delta = getattr(ch, "thinking", None)
                     if thinking_delta:
+                        has_thinking = True
                         yield StreamEvent(type=Evt.thinking, delta=thinking_delta)
+                # Emit thinking_completed before first content/tool_call
                 if getattr(ch, "content", None):
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
                     yield StreamEvent(type=Evt.content, delta=ch.content)
                 if getattr(ch, "tool_calls", None):
+                    # Emit thinking_completed before first tool_call
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
                     for tc in ch.tool_calls:
                         tid = getattr(tc, "id", None) or last_tid or "_last"
                         if getattr(tc, "id", None):

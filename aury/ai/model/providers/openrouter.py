@@ -380,6 +380,8 @@ class OpenRouterAdapter(OpenAIAdapter):
             # Track which tools have been notified via tool_call_start
             notified_tools: set[str] = set()
             last_progress: dict[str, int] = {}
+            has_thinking = False
+            thinking_completed_emitted = False
 
             # Use async iteration to not block event loop
             async for chunk in stream:
@@ -428,13 +430,20 @@ class OpenRouterAdapter(OpenAIAdapter):
                 if req.return_thinking:
                     reasoning_delta = getattr(ch, "reasoning", None) or getattr(ch, "reasoning_content", None)
                     if reasoning_delta:
+                        has_thinking = True
                         yield StreamEvent(type=Evt.thinking, delta=reasoning_delta)
 
                 if getattr(ch, "content", None):
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
                     accumulated_content.append(ch.content)
                     yield StreamEvent(type=Evt.content, delta=ch.content)
 
                 if getattr(ch, "tool_calls", None):
+                    if has_thinking and not thinking_completed_emitted:
+                        yield StreamEvent(type=Evt.thinking_completed)
+                        thinking_completed_emitted = True
                     for tc in ch.tool_calls:
                         # OpenAI 流式格式
                         # 所以必须用 index 作为主 key

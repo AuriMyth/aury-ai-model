@@ -7,6 +7,7 @@ import json
 class Evt(StrEnum):
     content = "content"
     thinking = "thinking"
+    thinking_completed = "thinking_completed"  # 思考完成
     tool_call_start = "tool_call_start"      # 工具调用开始（首次通知）
     tool_call_delta = "tool_call_delta"      # 工具参数增量
     tool_call_progress = "tool_call_progress"  # 工具参数接收进度
