@@ -79,8 +79,32 @@ class Message(BaseModel):
 
     @property
     def text(self) -> str:
-        """Convenience: extract all text content from parts (Text and Thinking)."""
+        """Extract all text content from parts (Text and Thinking)."""
         return "".join(p.text for p in self.parts if hasattr(p, "text"))
+
+    @property
+    def content(self) -> str:
+        """Alias for text. Extract all text content from parts."""
+        return self.text
+
+    @property
+    def thinking(self) -> str:
+        """Extract thinking content only."""
+        return "".join(p.text for p in self.parts if isinstance(p, Thinking))
+
+    @property
+    def has_tool_calls(self) -> bool:
+        """Check if message has tool calls."""
+        return bool(self.tool_calls)
+
+    @property
+    def first_tool_call(self) -> ToolCall | None:
+        """Get first tool call if any."""
+        return self.tool_calls[0] if self.tool_calls else None
+
+    def __str__(self) -> str:
+        """String representation for debugging."""
+        return self.text or f"[{self.role}]"
 
 class Usage(BaseModel):
     input_tokens: int = 0
