@@ -3,6 +3,9 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal, TypeAlias
 import json
+import os
+import base64
+import mimetypes
 
 class Evt(StrEnum):
     content = "content"
@@ -133,12 +136,45 @@ class msg:  # convenience constructors
         return Message(role=Role.system, parts=[Text(text=text)])
 
     @staticmethod
+    def _process_image_path(path: str) -> str:
+        """
+        处理图片路径：
+        - 如果是 HTTP/HTTPS URL，直接返回
+        - 如果是本地文件路径，读取并转换为 base64 data URL
+        """
+        # 判断是否是 HTTP/HTTPS URL
+        if path.startswith(('http://', 'https://')):
+            return path
+        
+        # 判断是否是本地文件路径
+        if os.path.isfile(path):
+            # 读取文件
+            with open(path, 'rb') as f:
+                image_data = f.read()
+            
+            # 获取 MIME 类型
+            mime_type, _ = mimetypes.guess_type(path)
+            if not mime_type or not mime_type.startswith('image/'):
+                # 默认使用 image/jpeg
+                mime_type = 'image/jpeg'
+            
+            # 转换为 base64
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+            
+            # 返回 data URL
+            return f"data:{mime_type};base64,{base64_data}"
+        
+        # 如果既不是 URL 也不是有效的本地文件，直接返回原始路径
+        return path
+
+    @staticmethod
     def user(text: str | None=None, images: list[str] | None=None) -> Message:
         parts: list[Part] = []
         if text:
             parts.append(Text(text=text))
         for u in images or []:
-            parts.append(Image(url=u))
+            processed_url = msg._process_image_path(u)
+            parts.append(Image(url=processed_url))
         return Message(role=Role.user, parts=parts)
 
     @staticmethod

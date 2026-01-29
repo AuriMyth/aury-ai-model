@@ -151,9 +151,17 @@ class OpenAIAdapter:
         return out
     
     def _to_messages_openai(self, messages: list[Message]) -> list[dict]:
-        """标准 OpenAI 格式：完全忽略 Thinking blocks。"""
+        """标准 OpenAI 格式：完全忽略 Thinking blocks。
+        
+        也会修复孤立的 tool 消息（没有对应的 assistant tool_call）。
+        这种情况可能出现在 agent 中断后的消息历史中，或者 middleware 伪造的 tool 消息。
+        """
         out: list[dict] = []
         is_kimi = "kimi" in self.model.lower() or "moonshot" in self.model.lower()
+        
+        # 单遍遍历：边处理边收集 tool_call_ids
+        seen_tool_call_ids: set[str] = set()
+        last_assistant_idx: int = -1
         
         for m in messages:
             item: dict = {"role": m.role}
@@ -161,37 +169,63 @@ class OpenAIAdapter:
             
             # tool 消息
             if m.role == "tool":
+                # 检查是否是孤立的 tool 消息
+                if m.tool_call_id and m.tool_call_id not in seen_tool_call_ids:
+                    tool_name = m.name or "_unknown_tool_"
+                    # 在最后一个 assistant 消息中注入 tool_call
+                    if last_assistant_idx >= 0:
+                        if "tool_calls" not in out[last_assistant_idx]:
+                            out[last_assistant_idx]["tool_calls"] = []
+                        out[last_assistant_idx]["tool_calls"].append({
+                            "id": m.tool_call_id,
+                            "type": "function",
+                            "function": {"name": tool_name, "arguments": "{}"},
+                        })
+                    else:
+                        # 没有 assistant 消息，创建一个
+                        out.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{
+                                "id": m.tool_call_id,
+                                "type": "function",
+                                "function": {"name": tool_name, "arguments": "{}"},
+                            }],
+                        })
+                        last_assistant_idx = len(out) - 1
+                
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
                 item["content"] = text
                 if m.tool_call_id:
                     item["tool_call_id"] = m.tool_call_id
-                # name is required for Gemini compatibility via OneAPI/NewAPI
-                # fallback to "_tool_response_" if not provided (avoid "unknown" as Gemini may treat it as a tool name)
                 item["name"] = m.name or "_tool_response_"
                 out.append(item)
                 continue
             
-            # assistant 消息的 tool_calls
-            if m.role == "assistant" and m.tool_calls:
-                item["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": tc.arguments_json},
-                    }
-                    for tc in m.tool_calls
-                ]
-            
-            # Kimi: Thinking parts -> reasoning_content for multi-turn tool calling
-            # When thinking is enabled, assistant messages must include reasoning_content
-            if is_kimi and m.role == "assistant":
-                thinking_text = "".join(p.text for p in m.parts if isinstance(p, Thinking) and p.text)
-                if thinking_text:
-                    item["reasoning_content"] = thinking_text
+            # assistant 消息
+            if m.role == "assistant":
+                last_assistant_idx = len(out)
+                if m.tool_calls:
+                    item["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.name, "arguments": tc.arguments_json},
+                        }
+                        for tc in m.tool_calls
+                    ]
+                    # 收集 tool_call_ids
+                    for tc in m.tool_calls:
+                        seen_tool_call_ids.add(tc.id)
+                
+                # Kimi: Thinking parts -> reasoning_content
+                if is_kimi:
+                    thinking_text = "".join(p.text for p in m.parts if isinstance(p, Thinking) and p.text)
+                    if thinking_text:
+                        item["reasoning_content"] = thinking_text
             
             # content 处理
             if has_images:
-                # 图片用数组格式（只包含 text 和 image，忽略 Thinking）
                 parts: list[dict] = []
                 for p in m.parts:
                     if isinstance(p, Text) and p.text:
@@ -200,7 +234,6 @@ class OpenAIAdapter:
                         parts.append({"type": "image_url", "image_url": {"url": p.url}})
                 item["content"] = parts if parts else None
             else:
-                # 纯文本（忽略 Thinking）
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
                 item["content"] = text or None
             
