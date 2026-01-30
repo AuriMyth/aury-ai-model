@@ -157,7 +157,17 @@ class OpenAIAdapter:
         这种情况可能出现在 agent 中断后的消息历史中，或者 middleware 伪造的 tool 消息。
         """
         out: list[dict] = []
-        is_kimi = "kimi" in self.model.lower() or "moonshot" in self.model.lower()
+        model_lower = self.model.lower()
+        is_kimi = "kimi" in model_lower or "moonshot" in model_lower
+        is_gpt = "gpt" in model_lower
+        
+        def _tid(tid: str | None) -> str:
+            """GPT 模型限制 tool_call_id 最大 40 字符。"""
+            if not tid:
+                return ""
+            if is_gpt and len(tid) > 40:
+                return tid[:40]
+            return tid
         
         # 单遍遍历：边处理边收集 tool_call_ids
         seen_tool_call_ids: set[str] = set()
@@ -169,15 +179,16 @@ class OpenAIAdapter:
             
             # tool 消息
             if m.role == "tool":
+                tcid = _tid(m.tool_call_id)
                 # 检查是否是孤立的 tool 消息
-                if m.tool_call_id and m.tool_call_id not in seen_tool_call_ids:
+                if tcid and tcid not in seen_tool_call_ids:
                     tool_name = m.name or "_unknown_tool_"
                     # 在最后一个 assistant 消息中注入 tool_call
                     if last_assistant_idx >= 0:
                         if "tool_calls" not in out[last_assistant_idx]:
                             out[last_assistant_idx]["tool_calls"] = []
                         out[last_assistant_idx]["tool_calls"].append({
-                            "id": m.tool_call_id,
+                            "id": tcid,
                             "type": "function",
                             "function": {"name": tool_name, "arguments": "{}"},
                         })
@@ -187,7 +198,7 @@ class OpenAIAdapter:
                             "role": "assistant",
                             "content": None,
                             "tool_calls": [{
-                                "id": m.tool_call_id,
+                                "id": tcid,
                                 "type": "function",
                                 "function": {"name": tool_name, "arguments": "{}"},
                             }],
@@ -196,8 +207,8 @@ class OpenAIAdapter:
                 
                 text = "".join(p.text for p in m.parts if isinstance(p, Text))
                 item["content"] = text
-                if m.tool_call_id:
-                    item["tool_call_id"] = m.tool_call_id
+                if tcid:
+                    item["tool_call_id"] = tcid
                 item["name"] = m.name or "_tool_response_"
                 out.append(item)
                 continue
@@ -208,15 +219,15 @@ class OpenAIAdapter:
                 if m.tool_calls:
                     item["tool_calls"] = [
                         {
-                            "id": tc.id,
+                            "id": _tid(tc.id),
                             "type": "function",
                             "function": {"name": tc.name, "arguments": tc.arguments_json},
                         }
                         for tc in m.tool_calls
                     ]
-                    # 收集 tool_call_ids
+                    # 收集 tool_call_ids (截断后的)
                     for tc in m.tool_calls:
-                        seen_tool_call_ids.add(tc.id)
+                        seen_tool_call_ids.add(_tid(tc.id))
                 
                 # Kimi: Thinking parts -> reasoning_content
                 if is_kimi:
