@@ -15,6 +15,7 @@ class Evt(StrEnum):
     tool_call_delta = "tool_call_delta"      # 工具参数增量
     tool_call_progress = "tool_call_progress"  # 工具参数接收进度
     tool_call = "tool_call"                  # 工具调用完整（参数完整）
+    image = "image"                          # 图片输出（如 Gemini 图片生成）
     usage = "usage"
     completed = "completed"
     error = "error"
@@ -32,6 +33,26 @@ class Text(BaseModel):
 class Image(BaseModel):
     type: Literal["image_url"] = "image_url"
     url: str
+
+    @property
+    def data(self) -> bytes | None:
+        """Extract raw image bytes from base64 data URL.
+        Returns None if URL is not a data URL.
+        """
+        if self.url and self.url.startswith("data:") and ";base64," in self.url:
+            base64_part = self.url.split(";base64,", 1)[1]
+            return base64.b64decode(base64_part)
+        return None
+
+    @property
+    def mime_type(self) -> str | None:
+        """Extract MIME type from data URL (e.g., 'image/png').
+        Returns None if URL is not a data URL.
+        """
+        if self.url and self.url.startswith("data:") and ";" in self.url:
+            # data:image/png;base64,... -> image/png
+            return self.url.split(":", 1)[1].split(";", 1)[0]
+        return None
 
 class Thinking(BaseModel):
     type: Literal["thinking"] = "thinking"
@@ -125,6 +146,7 @@ class StreamEvent(BaseModel):
     tool_call: ToolCall | None = None
     tool_call_delta: dict | None = None      # 工具参数增量: {"call_id": str, "arguments_delta": str}
     tool_call_progress: dict | None = None   # 工具参数进度: {"call_id": str, "bytes_received": int, "last_delta_size": int}
+    image: Image | None = None               # 图片输出
     usage: Usage | None = None
     error: str | None = None
     # OpenRouter: reasoning_details for Gemini 3 tool calling (emitted with completed event)

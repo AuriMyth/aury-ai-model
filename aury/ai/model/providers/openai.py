@@ -383,6 +383,34 @@ class OpenAIAdapter:
         reasoning = getattr(msg, "reasoning_content", None)
         if reasoning and req.return_thinking:
             parts.append(Thinking(text=reasoning))
+        # images output (OpenRouter Gemini image generation)
+        images = getattr(msg, "images", None)
+        if images:
+            for img_item in images:
+                try:
+                    # Support both object and dict formats
+                    if hasattr(img_item, "image_url"):
+                        img_url = img_item.image_url.url
+                    elif isinstance(img_item, dict):
+                        img_url = img_item.get("image_url", {}).get("url")
+                    else:
+                        continue
+                    if img_url:
+                        parts.append(Image(url=img_url))
+                except Exception:
+                    pass
+        
+        # 图片输出: 对于图片生成模型，从文本中提取 markdown 格式的图片 ![...](data:image/...)
+        model_lower = self.model.lower()
+        is_image_model = "image" in model_lower and ("gemini" in model_lower or "flux" in model_lower)
+        if is_image_model and content and "data:image/" in content:
+            import re
+            md_image_pattern = re.compile(r'!\[[^\]]*\]\((data:image/[^)]+)\)')
+            for match in md_image_pattern.finditer(content):
+                img_url = match.group(1)
+                if img_url and ";base64," in img_url:
+                    parts.append(Image(url=img_url))
+        
         tool_calls = self._extract_tool_calls(msg)
         return Message(role="assistant", parts=parts, tool_calls=tool_calls)
 
@@ -516,6 +544,14 @@ class OpenAIAdapter:
             chunk_count = 0
             has_thinking = False  # 是否有 thinking 内容
             thinking_completed_emitted = False  # 是否已发出 thinking_completed
+            
+            # 图片生成模型: 实时检测 markdown 图片
+            import re
+            accumulated_content: list[str] = []
+            model_lower = self.model.lower()
+            is_image_model = "image" in model_lower and ("gemini" in model_lower or "flux" in model_lower)
+            md_image_pattern = re.compile(r'!\[[^\]]*\]\((data:image/[^)]+)\)') if is_image_model else None
+            emitted_image_urls: set[str] = set()
             # Use async iteration to not block event loop
             async for chunk in stream:
                 chunk_count += 1
@@ -576,7 +612,33 @@ class OpenAIAdapter:
                     if has_thinking and not thinking_completed_emitted:
                         yield StreamEvent(type=Evt.thinking_completed)
                         thinking_completed_emitted = True
+                    accumulated_content.append(ch.content)
                     yield StreamEvent(type=Evt.content, delta=ch.content)
+                    
+                    # 图片生成模型: 实时检测 markdown 图片
+                    if md_image_pattern:
+                        full_so_far = "".join(accumulated_content)
+                        for match in md_image_pattern.finditer(full_so_far):
+                            img_url = match.group(1)
+                            if img_url and ";base64," in img_url and img_url not in emitted_image_urls:
+                                emitted_image_urls.add(img_url)
+                                yield StreamEvent(type=Evt.image, image=Image(url=img_url))
+                            
+                # 图片输出: 某些模型可能在 delta 或 message 中返回图片
+                images = getattr(ch, "images", None)
+                if images:
+                    for img_item in images:
+                        try:
+                            if hasattr(img_item, "image_url"):
+                                img_url = img_item.image_url.url
+                            elif isinstance(img_item, dict):
+                                img_url = img_item.get("image_url", {}).get("url")
+                            else:
+                                continue
+                            if img_url:
+                                yield StreamEvent(type=Evt.image, image=Image(url=img_url))
+                        except Exception:
+                            pass
                 if getattr(ch, "tool_calls", None):
                     # Emit thinking_completed before first tool_call
                     if has_thinking and not thinking_completed_emitted:
@@ -642,6 +704,38 @@ class OpenAIAdapter:
                                     last_progress[tid] = current_size
             for _, v in partial_tools.items():
                 yield StreamEvent(type=Evt.tool_call, tool_call=normalize_tool_call(v))
+            
+            # 图片输出: 最后再检查一遍 markdown 图片（确保不漏）
+            if md_image_pattern:
+                full_content = "".join(accumulated_content)
+                for match in md_image_pattern.finditer(full_content):
+                    img_url = match.group(1)
+                    if img_url and ";base64," in img_url and img_url not in emitted_image_urls:
+                        emitted_image_urls.add(img_url)
+                        yield StreamEvent(type=Evt.image, image=Image(url=img_url))
+            
+            # 图片输出: 某些模型（如 Gemini）在流结束时返回图片
+            # 需要从 stream 对象获取完整响应（如果支持）
+            try:
+                final_resp = getattr(stream, "response", None)
+                if final_resp and hasattr(final_resp, "choices") and final_resp.choices:
+                    final_msg = final_resp.choices[0].message
+                    images = getattr(final_msg, "images", None)
+                    if images:
+                        for img_item in images:
+                            try:
+                                if hasattr(img_item, "image_url"):
+                                    img_url = img_item.image_url.url
+                                elif isinstance(img_item, dict):
+                                    img_url = img_item.get("image_url", {}).get("url")
+                                else:
+                                    continue
+                                if img_url:
+                                    yield StreamEvent(type=Evt.image, image=Image(url=img_url))
+                            except Exception:
+                                pass
+            except Exception:
+                pass
             yield StreamEvent(type=Evt.completed)
         except Exception as e:
             raise TransportError(str(e)) from e
